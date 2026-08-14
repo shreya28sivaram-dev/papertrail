@@ -1,0 +1,10 @@
+# Never bake the local database or dev cruft into the image — data lives on the
+# persistent volume, not in the container.
+reading.db
+reading.db-shm
+reading.db-wal
+demo.db
+node_modules
+.git
+*.log
+.claude

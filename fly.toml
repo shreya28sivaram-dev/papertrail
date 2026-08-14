@@ -1,0 +1,32 @@
+# Fly.io config for Reading Tracker.
+# 1) Change `app` to a globally-unique name you like.
+# 2) Change `primary_region` to the Fly region nearest you
+#    (e.g. bom = Mumbai, iad = US-East, lhr = London — run `fly platform regions`).
+app = "reading-tracker-change-me"
+primary_region = "bom"
+
+[build]
+
+[env]
+  PORT = "8080"
+  DB_PATH = "/data/reading.db"
+  SECURE_COOKIES = "1"
+
+# Persistent disk — the SQLite database lives here so it survives restarts/deploys.
+[[mounts]]
+  source = "reading_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true          # redirect http -> https
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0    # scale to zero when idle (cold-starts on next visit)
+
+# IMPORTANT: keep this at ONE machine. SQLite is single-writer, and the volume
+# attaches to a single machine — do not `fly scale count 2+`.
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

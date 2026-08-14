@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reading Tracker</title>
+  <style>
+    /* Dark academia — "aged library page" (light) and "candlelit stacks" (dark). */
+    :root {
+      --bg: #e7ddc8;
+      --surface: #f3ecd9;
+      --ink: #2c261d;
+      --muted: #6c5f4c;
+      --line: #d2c4a8;
+      --accent: #7a2e28;          /* oxblood */
+      --accent-soft: #e7d7c0;
+      --want: #8a6d2f;            /* antique gold */
+      --reading: #4c6a48;         /* forest green */
+      --finished: #6a5566;        /* muted plum */
+      --danger: #8f2d24;
+      --radius: 8px;
+      --shadow: 0 1px 2px rgba(60,45,30,.12), 0 10px 30px rgba(60,45,30,.12);
+      --font-body: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "Times New Roman", serif;
+      --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #17120e;
+        --surface: #221a13;
+        --ink: #ecdfc5;
+        --muted: #a08e72;
+        --line: #3a2d21;
+        --accent: #c6a250;        /* brass */
+        --accent-soft: #2e2416;
+        --want: #c6a250;          /* brass */
+        --reading: #86a06e;       /* sage */
+        --finished: #b3a2c6;      /* faded lavender */
+        --danger: #d1685c;
+        --shadow: 0 1px 2px rgba(0,0,0,.45), 0 12px 30px rgba(0,0,0,.5);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      line-height: 1.55;
+    }
+    h1, h2, h3 { font-family: var(--font-display); }
+    header {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 40px 24px 8px;
+    }
+    header h1 { margin: 0; font-size: 32px; letter-spacing: .01em; }
+    header p { margin: 6px 0 0; color: var(--muted); font-style: italic; }
+    .userbar { max-width: 860px; margin: 0 auto; display: flex; justify-content: flex-end; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    #whoami { font-style: italic; }
+
+    /* Auth screen */
+    .auth-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .auth-card {
+      width: 100%; max-width: 380px; background: var(--surface); border: 1px solid var(--line);
+      border-radius: 14px; padding: 28px 26px; box-shadow: var(--shadow); text-align: center;
+    }
+    .auth-card h1 { margin: 0; font-size: 26px; }
+    .auth-tagline { margin: 6px 0 20px; color: var(--muted); font-style: italic; }
+    .auth-tabs { display: flex; gap: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px; margin-bottom: 18px; }
+    .auth-tab { flex: 1; background: transparent; color: var(--muted); border: none; border-radius: 999px; padding: 8px 0; font: inherit; font-weight: 600; cursor: pointer; }
+    .auth-tab.active { background: var(--accent); color: #fff; }
+    .auth-card .field { text-align: left; }
+    .auth-error { color: var(--danger); font-size: 13px; min-height: 18px; margin: 2px 0 10px; text-align: left; }
+    main { max-width: 860px; margin: 0 auto; padding: 16px 24px 80px; }
+
+    .toolbar {
+      display: flex; gap: 12px; flex-wrap: wrap; align-items: center;
+      margin: 20px 0 8px;
+    }
+    .search { flex: 1 1 220px; position: relative; }
+    .search input {
+      width: 100%; padding: 10px 12px 10px 34px;
+      border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--surface); color: var(--ink); font-size: 15px;
+    }
+    .search svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+    select.filter {
+      padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+      background: var(--surface); color: var(--ink); font-size: 15px;
+    }
+    button { font: inherit; cursor: pointer; border: none; border-radius: var(--radius); }
+    .btn-primary { background: var(--accent); color: #fff; padding: 10px 18px; font-weight: 600; }
+    .btn-danger { background: var(--danger); color: #fff; padding: 10px 18px; font-weight: 600; border-radius: var(--radius); }
+    .btn-danger:hover { filter: brightness(1.06); }
+    .confirm-overlay { z-index: 60; }
+    .confirm-modal { max-width: 400px; }
+    .confirm-msg { margin: 0; font-size: 15px; line-height: 1.5; }
+    .toast {
+      position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+      background: var(--ink); color: var(--bg); padding: 11px 18px; border-radius: 10px;
+      font-size: 14px; box-shadow: var(--shadow); opacity: 0; pointer-events: none;
+      transition: opacity .2s, transform .2s; z-index: 70; max-width: 90vw;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .btn-primary:hover { filter: brightness(1.06); }
+
+    .counts { display: flex; gap: 16px; color: var(--muted); font-size: 13px; margin: 4px 2px 20px; flex-wrap: wrap; }
+    .counts b { color: var(--ink); }
+
+    ul.entries { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+    .card {
+      background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      padding: 16px 18px; box-shadow: var(--shadow);
+    }
+    .card-top { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .card h3 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+    .card .meta { color: var(--muted); font-size: 14px; margin-top: 2px; }
+    .badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 2px; }
+    .badge {
+      font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+      text-transform: capitalize; white-space: nowrap;
+    }
+    .badge.type { background: var(--accent-soft); color: var(--accent); }
+    .badge.want { background: color-mix(in srgb, var(--want) 16%, transparent); color: var(--want); }
+    .badge.reading { background: color-mix(in srgb, var(--reading) 16%, transparent); color: var(--reading); }
+    .badge.finished { background: color-mix(in srgb, var(--finished) 18%, transparent); color: var(--finished); }
+
+    /* ===== Arched wooden bookcase ===== */
+    .bookcase {
+      max-width: 560px; margin: 8px auto 24px; position: relative;
+      padding: 22px 22px 0;
+      border-radius: 280px 280px 8px 8px / 210px 210px 8px 8px;
+      background: linear-gradient(90deg,
+        #351f10 0%, #573922 7%, #6d4a2b 20%, #6d4a2b 80%, #573922 93%, #351f10 100%);
+      box-shadow: 0 22px 45px rgba(0,0,0,.45), inset 0 2px 3px rgba(255,232,196,.18);
+    }
+    /* keystone at the apex of the arch */
+    .bookcase::before {
+      content: ''; position: absolute; top: -7px; left: 50%; transform: translateX(-50%);
+      width: 48px; height: 34px; background: linear-gradient(#744f2d, #4a3220);
+      box-shadow: 0 2px 5px rgba(0,0,0,.45); clip-path: polygon(20% 0, 80% 0, 100% 100%, 0 100%);
+      border-radius: 4px 4px 0 0;
+    }
+    .bookcase-inner {
+      position: relative; overflow: hidden; padding-top: 150px;   /* empty arched niche */
+      border-radius: 250px 250px 3px 3px / 168px 168px 3px 3px;
+      background:
+        radial-gradient(130% 62% at 50% -2%, rgba(0,0,0,.32), transparent 62%),
+        linear-gradient(#b8a684, #a7956f);
+      box-shadow: inset 0 0 26px rgba(55,35,16,.55), inset 0 0 0 1px rgba(0,0,0,.22);
+    }
+    .bookcase-base {
+      height: 30px; margin: 0 -4px; position: relative;
+      background: linear-gradient(#5a3c22, #33200f);
+      border-radius: 2px 2px 7px 7px;
+      box-shadow: 0 12px 20px rgba(0,0,0,.4), inset 0 2px 2px rgba(255,232,196,.14);
+    }
+    .bookcase-base::before, .bookcase-base::after {
+      content: ''; position: absolute; bottom: -9px; width: 36px; height: 11px;
+      background: linear-gradient(#4a3220, #2b1a0d); border-radius: 0 0 5px 5px;
+    }
+    .bookcase-base::before { left: 30px; }
+    .bookcase-base::after { right: 30px; }
+
+    .shelves {
+      display: flex; flex-wrap: wrap; align-items: flex-end;
+      column-gap: 4px; row-gap: 34px; padding: 0 16px 4px;
+      background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0, transparent 200px,                /* 200px spine zone (canvas shows) */
+        rgba(0,0,0,.45) 200px, rgba(0,0,0,.45) 205px,    /* shadow under books */
+        #6b4a2c 205px, #543821 223px,                    /* wooden shelf ledge */
+        transparent 223px, transparent 234px             /* gap to next shelf */
+      );
+    }
+    .spine {
+      height: 200px; width: var(--w, 46px); flex: 0 0 auto;
+      background: var(--spine, #5a3120);
+      color: var(--spine-ink, #f0e6cf);
+      border: none; border-radius: 2px 2px 1px 1px; cursor: pointer;
+      position: relative; overflow: hidden;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 14px 3px 12px;
+      box-shadow: inset -4px 0 7px rgba(0,0,0,.4), inset 4px 0 4px rgba(255,255,255,.07),
+                  2px 3px 7px rgba(0,0,0,.45);
+      transition: transform .13s ease;
+    }
+    .spine:hover, .spine:focus-visible { transform: translateY(-10px); outline: none; }
+    /* Woven bookcloth for spines without a cover. */
+    .spine:not(.has-cover) {
+      background-image:
+        repeating-linear-gradient(90deg, rgba(255,255,255,.04) 0 1px, transparent 1px 3px),
+        repeating-linear-gradient(0deg, rgba(0,0,0,.05) 0 1px, transparent 1px 3px);
+    }
+    /* Cover art shown on the spine, tinted to the book's colour for legibility. */
+    .spine-art { position: absolute; inset: 0; z-index: 0; background-size: cover; background-position: center; }
+    .spine-tint {
+      position: absolute; inset: 0; z-index: 1;
+      background-color: color-mix(in srgb, var(--spine) 42%, transparent);
+      background-image: linear-gradient(to top, rgba(12,8,4,.82), rgba(12,8,4,.2) 55%, rgba(12,8,4,.62));
+    }
+    .spine-band { position: absolute; top: 0; left: 0; right: 0; height: 7px; z-index: 3; background: var(--status, var(--muted)); opacity: .95; }
+    .spine::after { content: ''; position: absolute; left: 5px; right: 5px; bottom: 15px; height: 1px; z-index: 2; background: rgba(233,208,150,.5); }
+    .spine-title {
+      position: relative; z-index: 2;
+      writing-mode: vertical-rl; text-orientation: mixed;
+      font-family: var(--font-display); font-weight: 600; font-size: 13px;
+      line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      max-height: 150px; margin-top: 8px; letter-spacing: .01em;
+      text-shadow: 0 1px 2px rgba(0,0,0,.5);
+    }
+    .spine-author {
+      position: relative; z-index: 2;
+      writing-mode: vertical-rl; font-size: 9.5px; opacity: .78;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-height: 70px; margin-top: 6px;
+      text-shadow: 0 1px 2px rgba(0,0,0,.5);
+    }
+
+    /* ===== Open-book detail ===== */
+    .book-overlay { z-index: 45; align-items: center; padding: 24px 16px; }
+    .book-overlay.open { animation: bookFade .22s ease both; }
+    .book-spread {
+      position: relative; background: var(--surface); color: var(--ink);
+      border-radius: 8px; width: 100%; max-width: 780px; max-height: 88vh; overflow: hidden;
+      box-shadow: var(--shadow), 0 0 0 1px var(--line);
+      display: flex; flex-direction: column;
+      transform-origin: center left;
+    }
+    .book-overlay.open .book-spread { animation: bookOpen .34s cubic-bezier(.2,.72,.28,1) both; }
+    @keyframes bookFade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes bookOpen {
+      from { opacity: 0; transform: perspective(1700px) rotateY(-16deg) scale(.94); }
+      to   { opacity: 1; transform: perspective(1700px) rotateY(0) scale(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .book-overlay.open, .book-overlay.open .book-spread { animation: none; }
+    }
+    .book-close {
+      position: absolute; top: 10px; right: 10px; z-index: 2;
+      background: transparent; border: 1px solid var(--line); color: var(--muted);
+      width: 30px; height: 30px; border-radius: 999px; cursor: pointer; font-size: 15px; line-height: 1;
+    }
+    .book-close:hover { color: var(--ink); border-color: var(--muted); }
+    .book-body { overflow-y: auto; }
+    .book-pages { display: flex; gap: 0; }
+    .book-left {
+      flex: 0 0 40%; padding: 26px 22px; display: flex; flex-direction: column; gap: 12px;
+      border-right: 1px solid var(--line);
+      background: linear-gradient(to right, transparent, rgba(0,0,0,.03));
+    }
+    .book-right { flex: 1 1 60%; padding: 26px 22px; min-width: 0; }
+    .book-cover-lg {
+      width: 130px; height: 195px; object-fit: cover; border-radius: 4px;
+      border: 1px solid var(--line); box-shadow: var(--shadow); align-self: flex-start;
+    }
+    .book-cover-lg.placeholder {
+      display: flex; align-items: center; justify-content: center; color: var(--muted);
+      font-size: 12px; text-align: center; background: var(--bg); padding: 8px;
+    }
+    .book-title { margin: 4px 0 0; font-size: 22px; line-height: 1.2; }
+    .book-author { color: var(--muted); font-size: 15px; }
+    .book-pages-note { color: var(--muted); font-size: 12.5px; margin-top: -4px; }
+    .book-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 12px; }
+    @media (max-width: 620px) {
+      .book-pages { flex-direction: column; }
+      .book-left { flex-basis: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    }
+
+    /* Notes / reading log */
+    .notes { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+    .notes .label, .book-right .label {
+      font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--muted); font-weight: 700; margin-bottom: 10px; display: block;
+    }
+    .note-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+    .note {
+      background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+      padding: 10px 12px; position: relative;
+    }
+    .note-date { font-size: 11px; color: var(--muted); font-weight: 600; margin-bottom: 3px; }
+    .note-body { font-size: 14px; white-space: pre-wrap; }
+    .note-del {
+      position: absolute; top: 8px; right: 8px; background: transparent; color: var(--muted);
+      font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px;
+    }
+    .note-del:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+    .note-empty { font-size: 13px; color: var(--muted); margin: 0 0 10px; font-style: italic; }
+
+    /* Threads: a root note with follow-ups layered on top like sticky notes */
+    .thread { margin-bottom: 14px; }
+    .note-root { box-shadow: 2px 3px 0 -1px var(--line), 4px 6px 0 -2px var(--line); }
+    .followups {
+      margin: 0 0 0 14px; padding: 8px 0 0 16px;
+      border-left: 2px solid var(--line);
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .note-followup { position: relative; }
+    .note-followup::before {
+      content: ''; position: absolute; left: -21px; top: 15px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); border: 2px solid var(--surface);
+    }
+    .note-followup .note-date::before { content: '↳ '; color: var(--accent); }
+    .thread-actions { margin: 6px 0 0 16px; }
+    .btn-followup {
+      background: transparent; border: 1px dashed var(--line); color: var(--muted);
+      padding: 5px 10px; font-size: 12px; font-weight: 500;
+    }
+    .btn-followup:hover { color: var(--accent); border-color: var(--accent); }
+    .followup-form { display: none; gap: 8px; align-items: flex-end; margin: 8px 0 0 16px; }
+    .followup-form.open { display: flex; }
+    .followup-form textarea {
+      flex: 1; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--surface); color: var(--ink); font: inherit; font-size: 14px;
+      resize: vertical; min-height: 40px;
+    }
+
+    .note-add { display: flex; gap: 8px; align-items: flex-end; margin-top: 4px; }
+    .note-add textarea {
+      flex: 1; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--surface); color: var(--ink); font: inherit; font-size: 14px;
+      resize: vertical; min-height: 40px;
+    }
+
+    .card-actions { display: flex; gap: 8px; margin-top: 14px; }
+    .btn-ghost {
+      background: transparent; border: 1px solid var(--line); color: var(--muted);
+      padding: 6px 12px; font-size: 13px; font-weight: 500; white-space: nowrap;
+    }
+    .btn-ghost:hover { color: var(--ink); border-color: var(--muted); }
+    .btn-ghost.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+    .empty { text-align: center; color: var(--muted); padding: 60px 20px; }
+
+    /* View switch */
+    .viewswitch {
+      display: inline-flex; background: var(--surface); border: 1px solid var(--line);
+      border-radius: 999px; padding: 4px; margin: 20px 0 4px;
+    }
+    .vs-btn {
+      background: transparent; color: var(--muted); padding: 7px 20px;
+      border-radius: 999px; font-size: 14px; font-weight: 600;
+    }
+    .vs-btn.active { background: var(--accent); color: #fff; }
+
+    /* Reflections view */
+    .r-summary { display: flex; gap: 26px; flex-wrap: wrap; margin: 18px 2px 26px; }
+    .r-summary .stat { min-width: 64px; }
+    .r-summary .num { font-size: 24px; font-weight: 700; color: var(--ink); display: block; line-height: 1.1; }
+    .r-summary .cap { font-size: 12px; color: var(--muted); }
+    .r-label {
+      font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--muted); font-weight: 700; margin-bottom: 12px;
+    }
+    .r-block { margin-bottom: 30px; }
+    .r-themes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .theme-chip {
+      background: var(--accent-soft); color: var(--accent); border: 1px solid transparent;
+      border-radius: 999px; padding: 6px 13px; cursor: pointer; font-weight: 600; line-height: 1;
+    }
+    .theme-chip:hover { border-color: var(--accent); }
+    .theme-chip.active { background: var(--accent); color: #fff; }
+    .theme-chip .cnt { opacity: .55; margin-left: 6px; font-size: .82em; }
+    .r-clear {
+      background: transparent; color: var(--muted); border: 1px solid var(--line);
+      border-radius: 999px; padding: 6px 12px; font-size: 13px;
+    }
+    .r-clear:hover { color: var(--ink); border-color: var(--muted); }
+
+    /* Concept buckets */
+    .r-buckets { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+    .bucket-card {
+      text-align: left; background: var(--surface); border: 1px solid var(--line);
+      border-radius: 14px; padding: 14px 15px; cursor: pointer; box-shadow: var(--shadow);
+      display: flex; flex-direction: column; gap: 9px;
+    }
+    .bucket-card:hover { border-color: var(--accent); }
+    .bucket-card.active { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+    .bucket-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .bucket-label { font-weight: 700; font-size: 15.5px; color: var(--ink); letter-spacing: -.01em; }
+    .bucket-count {
+      background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 11.5px;
+      padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+    }
+    .bucket-blurb { font-size: 13px; color: var(--muted); margin-top: -3px; }
+    .bucket-books { display: flex; flex-wrap: wrap; gap: 5px; }
+    .bucket-book {
+      font-size: 11px; color: var(--muted); background: var(--bg);
+      border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
+    }
+    .bucket-quote {
+      font-size: 12.5px; color: var(--ink); opacity: .82; font-style: italic;
+      border-left: 2px solid var(--accent-soft); padding-left: 9px; line-height: 1.45;
+    }
+    .bucket-tl { position: relative; height: 12px; margin-top: 2px; }
+    .bucket-tl::before {
+      content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 2px;
+      background: var(--line); border-radius: 2px;
+    }
+    .tl-dot {
+      position: absolute; top: 2px; width: 8px; height: 8px; margin-left: -4px;
+      border-radius: 50%; background: var(--accent); border: 1.5px solid var(--surface);
+    }
+
+    .r-stream { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+    .stream-item {
+      background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+      padding: 13px 16px; box-shadow: var(--shadow);
+    }
+    .stream-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 7px; font-size: 12px; color: var(--muted); }
+    .stream-src { font-weight: 700; color: var(--ink); }
+    .stream-dot { opacity: .5; }
+    .stream-fup { color: var(--accent); font-weight: 600; }
+    .stream-body { font-size: 15px; white-space: pre-wrap; }
+    .stream-body mark { background: color-mix(in srgb, var(--accent) 30%, transparent); color: inherit; padding: 0 2px; border-radius: 3px; }
+    .stream-rootref { font-size: 12px; color: var(--muted); margin-top: 7px; border-left: 2px solid var(--line); padding-left: 9px; font-style: italic; }
+
+    /* Modal */
+    .overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.4);
+      display: none; align-items: flex-start; justify-content: center;
+      padding: 40px 16px; overflow-y: auto; z-index: 50;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--surface); border-radius: 16px; width: 100%; max-width: 520px;
+      padding: 24px; box-shadow: var(--shadow); border: 1px solid var(--line);
+    }
+    .modal h2 { margin: 0 0 16px; font-size: 20px; }
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: var(--muted); }
+    .field input, .field select {
+      width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+      border-radius: 10px; background: var(--bg); color: var(--ink); font: inherit;
+    }
+    .row2 { display: flex; gap: 12px; }
+    .row2 .field { flex: 1; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+    /* Book lookup + cover preview */
+    .lookup-row { display: flex; align-items: center; gap: 10px; }
+    .lookup-status { font-size: 13px; color: var(--muted); }
+    .lookup-status.ok { color: var(--reading); }
+    .lookup-status.none { color: var(--want); }
+    .cover-preview { display: flex; gap: 12px; align-items: center; margin-top: 12px; }
+    .cover-preview img {
+      width: 56px; height: 84px; object-fit: cover; border-radius: 6px;
+      border: 1px solid var(--line); background: var(--bg);
+    }
+    .cover-preview-cap { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    /* Match chooser */
+    .matches { margin-top: 12px; }
+    .matches-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .match-list { display: flex; flex-direction: column; gap: 6px; }
+    .match-row {
+      display: flex; gap: 10px; align-items: center; text-align: left; width: 100%;
+      background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+      padding: 7px 9px; cursor: pointer;
+    }
+    .match-row:hover { border-color: var(--accent); }
+    .match-row.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+    .match-cover {
+      width: 34px; height: 50px; object-fit: cover; border-radius: 4px;
+      border: 1px solid var(--line); background: var(--surface); flex: 0 0 auto;
+    }
+    .match-cover.empty { display: inline-block; }
+    .match-info { min-width: 0; display: flex; flex-direction: column; }
+    .match-title { font-size: 13px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .match-sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* Cover thumbnail on entry cards */
+    .card-cover {
+      width: 44px; height: 66px; object-fit: cover; border-radius: 5px;
+      border: 1px solid var(--line); flex: 0 0 auto; background: var(--bg);
+    }
+    .card-head-row { display: flex; gap: 14px; align-items: flex-start; }
+  </style>
+</head>
+<body>
+  <!-- Login / register gate (shown until authenticated) -->
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-card">
+      <h1>📚 Reading Tracker</h1>
+      <p class="auth-tagline">Your own private reading library.</p>
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" id="tabLogin">Log in</button>
+        <button type="button" class="auth-tab" id="tabRegister">Create account</button>
+      </div>
+      <form id="authForm" autocomplete="on">
+        <div class="field">
+          <label for="authUser">Username</label>
+          <input id="authUser" autocomplete="username" autocapitalize="none" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="authPass">Password</label>
+          <input id="authPass" type="password" autocomplete="current-password" />
+        </div>
+        <div class="auth-error" id="authError"></div>
+        <button type="submit" class="btn-primary" id="authSubmit" style="width:100%;">Log in</button>
+      </form>
+      <p class="hint" id="authHint">New here? Create an account — your library is visible only to you.</p>
+    </div>
+  </div>
+
+  <div id="appRoot" hidden>
+  <header>
+    <div class="userbar"><span id="whoami"></span><button type="button" class="btn-ghost" id="logoutBtn">Log out</button></div>
+    <h1>📚 Reading Tracker</h1>
+    <p>Everything you're reading, want to read, and have finished — with your reflections.</p>
+  </header>
+
+  <main>
+    <div class="viewswitch">
+      <button class="vs-btn active" data-view="library">Library</button>
+      <button class="vs-btn" data-view="reflections">Reflections</button>
+    </div>
+
+    <!-- Library view -->
+    <div id="libraryView">
+      <div class="toolbar">
+        <div class="search">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="search" type="search" placeholder="Search title, author, or notes…" />
+        </div>
+        <select id="statusFilter" class="filter">
+          <option value="">All statuses</option>
+          <option value="want">Want to read</option>
+          <option value="reading">Currently reading</option>
+          <option value="finished">Finished</option>
+        </select>
+        <select id="typeFilter" class="filter">
+          <option value="">All types</option>
+          <option value="book">Book</option>
+          <option value="article">Article</option>
+          <option value="paper">Paper</option>
+          <option value="other">Other media</option>
+        </select>
+        <select id="sortBy" class="filter" title="Arrange the shelf">
+          <option value="updated">Recently updated</option>
+          <option value="added">Recently added</option>
+          <option value="title">Title (A–Z)</option>
+          <option value="author">Author (A–Z)</option>
+          <option value="status">Status</option>
+        </select>
+        <button class="btn-primary" id="addBtn">+ Add entry</button>
+      </div>
+
+      <div class="counts" id="counts"></div>
+
+      <div class="bookcase">
+        <div class="bookcase-inner">
+          <div class="shelves" id="list"></div>
+        </div>
+        <div class="bookcase-base"></div>
+      </div>
+      <div class="empty" id="empty" style="display:none"></div>
+    </div>
+
+    <!-- Reflections view -->
+    <div id="reflectionsView" style="display:none">
+      <div class="search" style="margin: 20px 0 4px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="rSearch" type="search" placeholder="Search your thoughts…" />
+      </div>
+
+      <div class="r-summary" id="rSummary"></div>
+
+      <div class="r-block" id="rThemesBlock">
+        <div class="r-label">The questions you keep circling</div>
+        <div class="r-themes" id="rThemes"></div>
+      </div>
+
+      <div class="r-block">
+        <div class="r-label" id="rStreamLabel">Your thoughts, most recent first</div>
+        <ul class="r-stream" id="rStream"></ul>
+        <div class="empty" id="rEmpty" style="display:none"></div>
+      </div>
+    </div>
+  </main>
+  </div><!-- /#appRoot -->
+
+  <!-- Modal -->
+  <div class="overlay" id="overlay">
+    <div class="modal">
+      <h2 id="modalTitle">Add entry</h2>
+      <form id="form" autocomplete="off">
+        <input type="hidden" id="entryId" />
+        <div class="field">
+          <label for="title">Title *</label>
+          <input id="title" required maxlength="500" />
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="type">Type</label>
+            <select id="type">
+              <option value="book">Book</option>
+              <option value="article">Article</option>
+              <option value="paper">Paper</option>
+              <option value="other">Other media</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="status">Status</label>
+            <select id="status">
+              <option value="want">Want to read</option>
+              <option value="reading">Currently reading</option>
+              <option value="finished">Finished</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="author">Author / Source</label>
+          <input id="author" maxlength="300" autocomplete="off" placeholder="e.g. Ursula K. Le Guin, The New Yorker…" />
+        </div>
+
+        <!-- Book auto-fill (shown for type = book) -->
+        <input type="hidden" id="coverUrl" />
+        <input type="hidden" id="pagesField" />
+        <div class="field" id="bookLookupField">
+          <div class="lookup-row">
+            <button type="button" class="btn-ghost" id="lookupBtn">🔍 Look up book</button>
+            <span class="lookup-status" id="lookupStatus"></span>
+          </div>
+          <div class="cover-preview" id="coverPreview" style="display:none">
+            <img id="coverImg" alt="Cover" />
+            <div class="cover-preview-body">
+              <div class="cover-preview-cap">Selected cover</div>
+              <button type="button" class="btn-ghost" id="coverClear">Remove cover</button>
+            </div>
+          </div>
+          <div class="matches" id="matchesBox" style="display:none">
+            <div class="matches-label" id="matchesLabel"></div>
+            <div class="match-list" id="matchList"></div>
+          </div>
+        </div>
+
+        <div class="hint">For books, the title is looked up automatically to fill in author &amp; cover — you can edit or clear anything before saving. No match just leaves them blank.</div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" id="cancelBtn">Cancel</button>
+          <button type="submit" class="btn-primary" id="saveBtn">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Open-book detail view (opened from a shelf spine) -->
+  <div class="overlay book-overlay" id="bookOverlay">
+    <div class="book-spread">
+      <button class="book-close" id="bookClose" title="Close">✕</button>
+      <div class="book-body" id="bookBody"></div>
+    </div>
+  </div>
+
+  <!-- In-app confirmation (replaces native confirm) -->
+  <div class="overlay confirm-overlay" id="confirmOverlay">
+    <div class="modal confirm-modal">
+      <p class="confirm-msg" id="confirmMsg"></p>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="confirmCancel">Cancel</button>
+        <button type="button" class="btn-danger" id="confirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Transient error/message toast (replaces native alert) -->
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const api = '/api/entries';
+    let entries = [];
+
+    const $ = (id) => document.getElementById(id);
+    const list = $('list'), empty = $('empty');
+    const overlay = $('overlay');
+
+    const STATUS_LABEL = { want: 'Want to read', reading: 'Currently reading', finished: 'Finished' };
+    const TYPE_LABEL = { book: 'Book', article: 'Article', paper: 'Paper', other: 'Other media' };
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // In-app confirmation dialog — replaces window.confirm, which browsers can
+    // silently suppress ("don't allow more dialogs"), making buttons seem dead.
+    function confirmDialog(message, okLabel = 'Delete') {
+      return new Promise((resolve) => {
+        $('confirmMsg').textContent = message;
+        $('confirmOk').textContent = okLabel;
+        const ov = $('confirmOverlay');
+        ov.classList.add('open');
+        const done = (val) => {
+          ov.classList.remove('open');
+          $('confirmOk').onclick = null;
+          $('confirmCancel').onclick = null;
+          ov.onclick = null;
+          document.removeEventListener('keydown', onKey);
+          resolve(val);
+        };
+        const onKey = (e) => {
+          if (e.key === 'Escape') done(false);
+          if (e.key === 'Enter') done(true);
+        };
+        $('confirmOk').onclick = () => done(true);
+        $('confirmCancel').onclick = () => done(false);
+        ov.onclick = (e) => { if (e.target === ov) done(false); };
+        document.addEventListener('keydown', onKey);
+        $('confirmOk').focus();
+      });
+    }
+
+    // Transient toast — replaces window.alert for non-blocking messages.
+    let toastTimer;
+    function toast(message) {
+      const el = $('toast');
+      el.textContent = message;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+    }
+
+    // "2026-08-09 14:34:22" -> "Aug 9, 2026 · 2:34 PM"
+    function fmtDate(s) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(s || '');
+      if (!m) return s || '';
+      const [, y, mo, d, h, mi] = m.map(Number);
+      const dt = new Date(y, mo - 1, d, h, mi);
+      return dt.toLocaleString(undefined, {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit',
+      });
+    }
+
+    async function load() {
+      const search = $('search').value.trim();
+      const url = search ? `${api}?search=${encodeURIComponent(search)}` : api;
+      const res = await fetch(url);
+      if (res.status === 401) return onUnauthorized();
+      entries = await res.json();
+      render();
+      refreshOpenBook();
+    }
+
+    function noteCard(n, cls) {
+      return `<div class="note ${cls}">
+        <div class="note-date">${fmtDate(n.created_at)}</div>
+        <div class="note-body">${esc(n.body)}</div>
+        <button class="note-del" title="Delete" data-note-del="${n.id}">×</button>
+      </div>`;
+    }
+
+    function threadHtml(root) {
+      const fups = root.followups || [];
+      const followupsBlock = fups.length
+        ? `<div class="followups">${fups.map((f) => noteCard(f, 'note-followup')).join('')}</div>`
+        : '';
+      return `<li class="thread">
+        ${noteCard(root, 'note-root')}
+        ${followupsBlock}
+        <div class="thread-actions">
+          <button class="btn-followup" data-followup-toggle="${root.id}">＋ Add follow-up</button>
+        </div>
+        <div class="followup-form" data-followup-formfor="${root.id}">
+          <textarea data-followup-input="${root.id}" placeholder="How has your thinking changed? Add a follow-up…"></textarea>
+          <button class="btn-ghost" data-followup-add="${root.id}">Add</button>
+        </div>
+      </li>`;
+    }
+
+    // Deterministic dark-academia spine colours [background, ink].
+    const SPINE_COLORS = [
+      ['#6e2b26', '#f0e2c8'], ['#3f5540', '#eef0da'], ['#2f3a52', '#e6e6d8'],
+      ['#7a5a1f', '#faf1d8'], ['#4f3a52', '#efe0e6'], ['#2e4a45', '#e4efe3'],
+      ['#5a3120', '#f2e3cf'], ['#33302b', '#e8dcc2'],
+    ];
+    const STATUS_VAR = { want: 'var(--want)', reading: 'var(--reading)', finished: 'var(--finished)' };
+    // Spine thickness comes from page count — five bands. Books with no known
+    // page count (e.g. articles, or a lookup that returned none) get a medium spine.
+    function pagesToWidth(p) {
+      p = p | 0;
+      if (p <= 0) return 50;      // unknown → medium
+      if (p < 150) return 36;     // slim (novellas)
+      if (p < 280) return 44;
+      if (p < 430) return 54;
+      if (p < 650) return 64;
+      return 74;                  // tomes
+    }
+    function spineStyle(e) {
+      const s = (e.title || '') + '#' + e.id;
+      let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+      const [bg, ink] = SPINE_COLORS[h % SPINE_COLORS.length];   // colour stays by hash
+      return { bg, ink, w: pagesToWidth(e.pages) };              // width by page count
+    }
+
+    function render() {
+      const sf = $('statusFilter').value;
+      const tf = $('typeFilter').value;
+      let shown = entries.filter((e) =>
+        (!sf || e.status === sf) && (!tf || e.type === tf));
+
+      const c = { want: 0, reading: 0, finished: 0 };
+      entries.forEach((e) => c[e.status]++);
+      $('counts').innerHTML =
+        `<span><b>${entries.length}</b> total</span>` +
+        `<span><b>${c.want}</b> want to read</span>` +
+        `<span><b>${c.reading}</b> reading</span>` +
+        `<span><b>${c.finished}</b> finished</span>`;
+
+      list.innerHTML = '';
+      if (shown.length === 0) {
+        empty.style.display = 'block';
+        empty.textContent = entries.length === 0
+          ? 'Nothing here yet. Add your first entry to get started.'
+          : 'No entries match these filters.';
+        return;
+      }
+      empty.style.display = 'none';
+
+      list.innerHTML = sortEntries(shown).map((e) => {
+        const { bg, ink, w } = spineStyle(e);
+        const st = STATUS_VAR[e.status] || 'var(--muted)';
+        const author = e.author ? `<span class="spine-author">${esc(e.author)}</span>` : '';
+        const count = (e.notes || []).reduce((n, r) => n + 1 + (r.followups || []).length, 0);
+        const label = `${e.title}${e.author ? ' — ' + e.author : ''} · ${STATUS_LABEL[e.status] || e.status}${count ? ` · ${count} note${count === 1 ? '' : 's'}` : ''}`;
+        const art = e.cover_url
+          ? `<span class="spine-art" style="background-image:url('${esc(e.cover_url)}')"></span><span class="spine-tint"></span>`
+          : '';
+        return `<button class="spine${e.cover_url ? ' has-cover' : ''}" data-open="${e.id}" title="${esc(label)}"
+          style="--w:${w}px; --spine:${bg}; --spine-ink:${ink}; --status:${st};">
+          ${art}
+          <span class="spine-band"></span>
+          <span class="spine-title">${esc(e.title)}</span>
+          ${author}
+        </button>`;
+      }).join('');
+    }
+
+    // Shelf arrangement.
+    function sortEntries(arr) {
+      const by = ($('sortBy') && $('sortBy').value) || 'updated';
+      const a = arr.slice();
+      const rank = { reading: 0, want: 1, finished: 2 };
+      const cmpTitle = (x, y) =>
+        (x.title || '').localeCompare(y.title || '', undefined, { sensitivity: 'base' });
+      if (by === 'added') a.sort((x, y) => y.id - x.id);
+      else if (by === 'title') a.sort(cmpTitle);
+      else if (by === 'author') a.sort((x, y) =>
+        (x.author || '￿').localeCompare(y.author || '￿', undefined, { sensitivity: 'base' }) || cmpTitle(x, y));
+      else if (by === 'status') a.sort((x, y) => (rank[x.status] - rank[y.status]) || cmpTitle(x, y));
+      return a; // 'updated' keeps the server order (updated_at desc)
+    }
+
+    // ===== Open-book detail (opened by tapping a spine) =====
+    let openBookId = null;
+    const bookOverlay = $('bookOverlay'), bookBody = $('bookBody');
+
+    function renderBookBody(e) {
+      const notes = e.notes || [];
+      const notesList = notes.length
+        ? `<ul class="note-list">${notes.map(threadHtml).join('')}</ul>`
+        : `<p class="note-empty">No thoughts yet — jot your first one below.</p>`;
+      const cover = e.cover_url
+        ? `<img class="book-cover-lg" src="${esc(e.cover_url)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'book-cover-lg placeholder',textContent:'No cover'}))" />`
+        : `<div class="book-cover-lg placeholder">No cover</div>`;
+      const author = e.author ? `<div class="book-author">${esc(e.author)}</div>` : '';
+      const pages = e.pages ? `<div class="book-pages-note">${e.pages} pages</div>` : '';
+      bookBody.innerHTML = `
+        <div class="book-pages">
+          <div class="book-left">
+            ${cover}
+            <h2 class="book-title">${esc(e.title)}</h2>
+            ${author}
+            ${pages}
+            <div class="badges">
+              <span class="badge type">${TYPE_LABEL[e.type] || e.type}</span>
+              <span class="badge ${e.status}">${STATUS_LABEL[e.status] || e.status}</span>
+            </div>
+            <div class="book-actions">
+              <button class="btn-ghost" data-edit="${e.id}">Edit details</button>
+              <button class="btn-ghost danger" data-del="${e.id}">Delete</button>
+            </div>
+          </div>
+          <div class="book-right">
+            <div class="label">Notes &amp; reflections</div>
+            ${notesList}
+            <div class="note-add">
+              <textarea data-note-input="${e.id}" rows="1" placeholder="Add a thought — what stood out today?"></textarea>
+              <button class="btn-ghost" data-note-add="${e.id}">Add note</button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function openBook(id) {
+      const e = entries.find((x) => String(x.id) === String(id));
+      if (!e) return;
+      openBookId = e.id;
+      renderBookBody(e);
+      bookOverlay.classList.add('open');
+      bookBody.scrollTop = 0;
+    }
+    function closeBook() {
+      openBookId = null;
+      bookOverlay.classList.remove('open');
+    }
+    // Keep the open book in sync after any data reload.
+    function refreshOpenBook() {
+      if (openBookId == null) return;
+      const e = entries.find((x) => x.id === openBookId);
+      if (e) renderBookBody(e); else closeBook();
+    }
+    $('bookClose').onclick = closeBook;
+    bookOverlay.addEventListener('click', (e) => { if (e.target === bookOverlay) closeBook(); });
+
+    // --- Modal handling ---
+    let lastLookedUp = '';       // title we last auto-looked-up, to avoid repeats
+    let matchCandidates = [];    // candidates from the last lookup
+    let selectedMatch = -1;      // index of the chosen candidate
+
+    function setCover(url) {
+      $('coverUrl').value = url || '';
+      if (url) {
+        $('coverImg').src = url;
+        $('coverPreview').style.display = 'flex';
+      } else {
+        $('coverImg').removeAttribute('src');
+        $('coverPreview').style.display = 'none';
+      }
+    }
+    function setLookupStatus(text, cls) {
+      const el = $('lookupStatus');
+      el.textContent = text || '';
+      el.className = 'lookup-status' + (cls ? ' ' + cls : '');
+    }
+    // Show the lookup controls only for books.
+    function syncBookUI() {
+      $('bookLookupField').style.display = $('type').value === 'book' ? '' : 'none';
+    }
+
+    function hideMatches() {
+      matchCandidates = [];
+      selectedMatch = -1;
+      $('matchesBox').style.display = 'none';
+      $('matchList').innerHTML = '';
+    }
+
+    function renderMatches() {
+      if (!matchCandidates.length) { $('matchesBox').style.display = 'none'; return; }
+      $('matchesBox').style.display = '';
+      $('matchesLabel').textContent = matchCandidates.length > 1
+        ? 'Matches — tap the right book:' : 'Match:';
+      $('matchList').innerHTML = matchCandidates.map((c, i) => {
+        const cov = c.cover_url
+          ? `<img class="match-cover" src="${esc(c.cover_url)}" alt="" onerror="this.style.visibility='hidden'" />`
+          : `<span class="match-cover empty"></span>`;
+        const yr = c.year ? ` · ${c.year}` : '';
+        return `<button type="button" class="match-row${i === selectedMatch ? ' selected' : ''}" data-idx="${i}">
+          ${cov}
+          <span class="match-info">
+            <span class="match-title">${esc(c.title)}</span>
+            <span class="match-sub">${esc(c.author || 'Unknown author')}${yr}</span>
+          </span>
+        </button>`;
+      }).join('');
+    }
+
+    // Apply a candidate's author + cover. `explicit` (a click) overrides a typed
+    // author; the initial auto-pick won't clobber something already entered.
+    function selectMatch(i, { explicit = false } = {}) {
+      const c = matchCandidates[i];
+      if (!c) return;
+      selectedMatch = i;
+      setCover(c.cover_url || '');
+      $('pagesField').value = c.pages || '';
+      if (c.author && (explicit || !$('author').value.trim())) $('author').value = c.author;
+      renderMatches();
+    }
+
+    function openModal(entry) {
+      $('modalTitle').textContent = entry ? 'Edit entry' : 'Add entry';
+      $('entryId').value = entry ? entry.id : '';
+      $('title').value = entry ? entry.title : '';
+      $('type').value = entry ? entry.type : 'book';
+      $('status').value = entry ? entry.status : 'want';
+      $('author').value = entry ? entry.author : '';
+      hideMatches();
+      setCover(entry ? entry.cover_url : '');
+      $('pagesField').value = entry ? (entry.pages || '') : '';
+      setLookupStatus('');
+      lastLookedUp = entry ? entry.title.trim().toLowerCase() : '';
+      syncBookUI();
+      overlay.classList.add('open');
+      $('title').focus();
+    }
+    function closeModal() { overlay.classList.remove('open'); }
+
+    // Look up the current title and offer matches (never blocks saving).
+    // `explicit` (the button) fills the author outright; the automatic blur
+    // look-up won't overwrite an author you've already typed.
+    async function lookupCurrentBook({ explicit = false } = {}) {
+      const title = $('title').value.trim();
+      if ($('type').value !== 'book' || !title) return;
+      lastLookedUp = title.toLowerCase();
+      hideMatches();
+      setLookupStatus('Searching…');
+      let data;
+      try {
+        const res = await fetch(`/api/book-lookup?title=${encodeURIComponent(title)}`);
+        data = await res.json();
+      } catch {
+        setLookupStatus('Lookup unavailable — enter details manually.', 'none');
+        return;
+      }
+      const candidates = (data && data.candidates) || [];
+      if (!candidates.length) {
+        setLookupStatus('No match — fill in author/cover yourself.', 'none');
+        return;
+      }
+      matchCandidates = candidates;
+      renderMatches();
+      selectMatch(0, { explicit });   // apply best guess
+      setLookupStatus(candidates.length > 1
+        ? `Found ${candidates.length} matches — top one applied. Pick another if it’s the wrong book.`
+        : `Found in ${candidates[0].source}. Edit anything before saving.`, 'ok');
+    }
+
+    $('addBtn').onclick = () => openModal(null);
+    $('cancelBtn').onclick = closeModal;
+    $('coverClear').onclick = () => { setCover(''); };
+    $('lookupBtn').onclick = () => lookupCurrentBook({ explicit: true });
+    $('matchList').addEventListener('click', (e) => {
+      const idx = e.target.closest('[data-idx]')?.getAttribute('data-idx');
+      if (idx != null) selectMatch(Number(idx), { explicit: true });
+    });
+    $('type').addEventListener('change', () => { syncBookUI(); });
+    // Auto-look-up when leaving the title field (only for a new/changed book title).
+    $('title').addEventListener('blur', () => {
+      const t = $('title').value.trim().toLowerCase();
+      if (t && t !== lastLookedUp) lookupCurrentBook();
+    });
+    overlay.onclick = (e) => { if (e.target === overlay) closeModal(); };
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if ($('confirmOverlay').classList.contains('open')) return;   // handled by the dialog
+      if (overlay.classList.contains('open')) { closeModal(); return; }
+      if (bookOverlay.classList.contains('open')) closeBook();
+    });
+
+    $('form').onsubmit = async (e) => {
+      e.preventDefault();
+      const id = $('entryId').value;
+      const payload = {
+        title: $('title').value.trim(),
+        type: $('type').value,
+        status: $('status').value,
+        author: $('author').value.trim(),
+        cover_url: $('coverUrl').value,
+        pages: $('pagesField').value || 0,
+      };
+      if (!payload.title) return;
+      const res = await fetch(id ? `${api}/${id}` : api, {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || 'Something went wrong.');
+        return;
+      }
+      closeModal();
+      await load();
+    };
+
+    // --- List actions (event delegation) ---
+    async function addNote(entryId, textarea) {
+      const body = textarea.value.trim();
+      if (!body) { textarea.focus(); return; }
+      const res = await fetch(`${api}/${entryId}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || 'Could not save note.');
+        return;
+      }
+      await load();
+    }
+
+    async function addFollowup(noteId, textarea) {
+      const body = textarea.value.trim();
+      if (!body) { textarea.focus(); return; }
+      const res = await fetch(`/api/notes/${noteId}/followups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(err.error || 'Could not save follow-up.');
+        return;
+      }
+      await load();
+    }
+
+    // A click on a shelf spine opens that book.
+    list.addEventListener('click', (e) => {
+      const id = e.target.closest('[data-open]')?.getAttribute('data-open');
+      if (id) openBook(id);
+    });
+
+    // Entry + notes actions live inside the open-book panel.
+    bookBody.addEventListener('click', async (e) => {
+      const t = e.target;
+      const editId = t.getAttribute('data-edit');
+      const delId = t.getAttribute('data-del');
+      const noteAddId = t.getAttribute('data-note-add');
+      const noteDelId = t.getAttribute('data-note-del');
+      const followupToggle = t.getAttribute('data-followup-toggle');
+      const followupAddId = t.getAttribute('data-followup-add');
+
+      if (followupToggle) {
+        const form = bookBody.querySelector(`.followup-form[data-followup-formfor="${followupToggle}"]`);
+        if (form) {
+          form.classList.toggle('open');
+          if (form.classList.contains('open')) form.querySelector('textarea')?.focus();
+        }
+        return;
+      }
+      if (followupAddId) {
+        const ta = bookBody.querySelector(`textarea[data-followup-input="${followupAddId}"]`);
+        if (ta) await addFollowup(followupAddId, ta);
+        return;
+      }
+
+      if (editId) {
+        const entry = entries.find((x) => String(x.id) === editId);
+        if (entry) openModal(entry);
+      } else if (delId) {
+        const entry = entries.find((x) => String(x.id) === delId);
+        if (entry && await confirmDialog(`Delete “${entry.title}” and all its notes? This cannot be undone.`)) {
+          await fetch(`${api}/${delId}`, { method: 'DELETE' });
+          closeBook();
+          await load();
+        }
+      } else if (noteAddId) {
+        const ta = bookBody.querySelector(`textarea[data-note-input="${noteAddId}"]`);
+        if (ta) await addNote(noteAddId, ta);
+      } else if (noteDelId) {
+        if (await confirmDialog('Delete this note?')) {
+          await fetch(`/api/notes/${noteDelId}`, { method: 'DELETE' });
+          await load();
+        }
+      }
+    });
+
+    // Cmd/Ctrl+Enter inside a note box submits it.
+    bookBody.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        const ta = e.target;
+        if (!ta || !ta.getAttribute) return;
+        const noteId = ta.getAttribute('data-note-input');
+        const fupId = ta.getAttribute('data-followup-input');
+        if (noteId) { e.preventDefault(); addNote(noteId, ta); }
+        else if (fupId) { e.preventDefault(); addFollowup(fupId, ta); }
+      }
+    });
+
+    // --- Filters & search ---
+    let searchTimer;
+    $('search').addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(load, 200);
+    });
+    $('statusFilter').addEventListener('change', render);
+    $('typeFilter').addEventListener('change', render);
+    $('sortBy').addEventListener('change', render);
+
+    // ============ Reflections view ============
+    const reflect = { stream: [], buckets: [], activeBucket: null };
+
+    // Themes as *concepts*, not raw words. Each bucket is a recurring question,
+    // matched by a family of related terms (matched as whole-word prefixes, so
+    // "control" also catches "controls", "controlling"). Edit freely — this is
+    // the taxonomy that turns scattered words into meaningful buckets.
+    const BUCKETS = [
+      { key: 'meaning',   label: 'Making meaning',          blurb: 'meaning as something you make, not find',
+        terms: ['meaning', 'meaningful', 'purpose', 'fiction', 'narrat', 'story', 'stories'] },
+      { key: 'faith',     label: 'Faith & upbringing',      blurb: 'god, religion, how you were raised',
+        terms: ['god', 'religio', 'christian', 'protestant', 'faith', 'belief', 'believ', 'preach', 'conversion', 'idealog', 'ideolog'] },
+      { key: 'control',   label: 'Control & order',         blurb: 'holding chaos at bay through order',
+        terms: ['control', 'order', 'calendar', 'disciplin', 'judgment', 'routine', 'fence'] },
+      { key: 'pressure',  label: 'Pressure & timing',       blurb: 'self-imposed “behind schedule”',
+        terms: ['pressure', 'presure', 'breakthrough', 'break through', 'behind', 'timeline', 'famous'] },
+      { key: 'mortality', label: 'Mortality & perspective', blurb: 'death as a way to shrink what matters',
+        terms: ['death', 'die', 'dying', 'mortal', 'perspective'] },
+      { key: 'rest',      label: 'Rest & its guilt',        blurb: 'slowness vs. productivity guilt',
+        terms: ['resting', 'rested', 'slow', 'bored', 'guilt', 'doing nothing', 'single-task', 'productiv', 'idle', 'lazy'] },
+      { key: 'regret',    label: 'Regret & other lives',    blurb: 'the lives you didn’t live',
+        terms: ['regret', 'unlived', 'alternate', 'choice', 'lives', 'door'] },
+      { key: 'ambition',  label: 'Drive & ambition',        blurb: 'the chase — motivation, wanting more',
+        terms: ['dopamine', 'ambition', 'motivation', 'pursuit', 'chase', 'goal', 'improv'] },
+      { key: 'growth',    label: 'Self & change',           blurb: 'the self you are becoming',
+        terms: ['myself', 'realise', 'realize', 'life chang', 'changed my', 'grow', 'become'] },
+      { key: 'solitude',  label: 'Solitude',                blurb: 'being alone, private, self-contained',
+        terms: ['solitude', 'alone', 'private', 'lonely', 'isolation'] },
+    ];
+
+    function termsRegex(terms) {
+      return new RegExp('\\b(' + terms.map((t) =>
+        t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')[a-z]*', 'gi');
+    }
+    function hitCount(terms, body) {
+      const m = body.match(termsRegex(terms));
+      return m ? m.length : 0;
+    }
+
+    function computeBuckets(stream) {
+      return BUCKETS.map((b) => {
+        const notes = stream.filter((s) => hitCount(b.terms, s.body) > 0);
+        if (!notes.length) return null;
+        const books = [...new Set(notes.map((n) => n.entry.title))];
+        const days = new Set(notes.map((n) => n.at.slice(0, 10)));
+        const rep = notes.slice().sort((a, x) =>
+          (hitCount(b.terms, x.body) - hitCount(b.terms, a.body)) || (x.body.length - a.body.length))[0];
+        return { ...b, notes, count: notes.length, books, days: days.size, rep };
+      }).filter(Boolean).sort((a, b) => b.count - a.count);
+    }
+
+    function highlight(text, terms) {
+      const safe = esc(text);
+      if (!terms || !terms.length) return safe;
+      return safe.replace(termsRegex(terms), '<mark>$1</mark>');
+    }
+
+    // Position a note on the shared timeline (0–100%) by when it was written.
+    function timePct(at, minT, maxT) {
+      const t = new Date(at.replace(' ', 'T')).getTime();
+      if (!(maxT > minT)) return 50;
+      return Math.round(((t - minT) / (maxT - minT)) * 100);
+    }
+
+    async function loadReflections() {
+      const res = await fetch(api);
+      if (res.status === 401) return onUnauthorized();
+      const all = await res.json();
+      const stream = [];
+      for (const e of all) {
+        for (const root of (e.notes || [])) {
+          stream.push({ body: root.body, at: root.created_at, entry: e, followup: false });
+          for (const f of (root.followups || [])) {
+            stream.push({ body: f.body, at: f.created_at, entry: e, followup: true, rootGist: root.body });
+          }
+        }
+      }
+      stream.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+      reflect.stream = stream;
+      reflect.buckets = computeBuckets(stream);
+      drawReflections();
+    }
+
+    function drawReflections() {
+      const { stream, buckets, activeBucket } = reflect;
+
+      // Summary from the full stream.
+      const entryIds = new Set(stream.map((s) => s.entry.id));
+      const days = new Set(stream.map((s) => s.at.slice(0, 10)));
+      const minT = stream.length ? new Date(stream[stream.length - 1].at.replace(' ', 'T')).getTime() : 0;
+      const maxT = stream.length ? new Date(stream[0].at.replace(' ', 'T')).getTime() : 0;
+      let span = '';
+      if (stream.length) {
+        const first = stream[stream.length - 1].at, last = stream[0].at;
+        span = first.slice(0, 10) === last.slice(0, 10)
+          ? fmtDate(last).split(',').slice(0, 2).join(',')
+          : `${fmtDate(first).replace(/,[^,]*$/, '')} → ${fmtDate(last).replace(/,[^,]*$/, '')}`;
+      }
+      $('rSummary').innerHTML = stream.length ? [
+        `<div class="stat"><span class="num">${stream.length}</span><span class="cap">thought${stream.length === 1 ? '' : 's'} logged</span></div>`,
+        `<div class="stat"><span class="num">${entryIds.size}</span><span class="cap">entr${entryIds.size === 1 ? 'y' : 'ies'} explored</span></div>`,
+        `<div class="stat"><span class="num">${days.size}</span><span class="cap">day${days.size === 1 ? '' : 's'} reflecting</span></div>`,
+        span ? `<div class="stat"><span class="num" style="font-size:15px;padding-top:6px;">${span}</span><span class="cap">span</span></div>` : '',
+      ].join('') : '';
+
+      // Concept buckets as cards.
+      const bucketBlock = $('rThemesBlock');
+      if (buckets.length) {
+        bucketBlock.style.display = '';
+        const cards = buckets.map((b) => {
+          const on = b.key === activeBucket ? ' active' : '';
+          const dots = b.notes.map((n) =>
+            `<span class="tl-dot" style="left:${timePct(n.at, minT, maxT)}%" title="${fmtDate(n.at)}"></span>`).join('');
+          const books = b.books.slice(0, 4).map((t) => `<span class="bucket-book">${esc(t)}</span>`).join('') +
+            (b.books.length > 4 ? `<span class="bucket-book">+${b.books.length - 4}</span>` : '');
+          const quote = b.rep.body.length > 150 ? b.rep.body.slice(0, 150) + '…' : b.rep.body;
+          return `<button class="bucket-card${on}" data-bucket="${b.key}">
+            <div class="bucket-head">
+              <span class="bucket-label">${esc(b.label)}</span>
+              <span class="bucket-count">${b.count} thought${b.count === 1 ? '' : 's'}</span>
+            </div>
+            <div class="bucket-blurb">${esc(b.blurb)}</div>
+            <div class="bucket-books">${books}</div>
+            <div class="bucket-quote">“${esc(quote)}”</div>
+            <div class="bucket-tl">${dots}</div>
+          </button>`;
+        }).join('');
+        $('rThemes').innerHTML = `<div class="r-buckets">${cards}</div>` +
+          (activeBucket ? `<button class="r-clear" data-bucket-clear="1" style="margin-top:12px;">Show all thoughts ✕</button>` : '');
+      } else {
+        bucketBlock.style.display = 'none';
+      }
+
+      // Stream, filtered by active bucket + local search.
+      const q = $('rSearch').value.trim().toLowerCase();
+      const active = activeBucket ? buckets.find((b) => b.key === activeBucket) : null;
+      let items = active ? active.notes.slice() : stream;
+      if (q) items = items.filter((s) =>
+        s.body.toLowerCase().includes(q) || s.entry.title.toLowerCase().includes(q));
+
+      $('rStreamLabel').textContent = active
+        ? `Thoughts about ${active.label.toLowerCase()}`
+        : 'Your thoughts, most recent first';
+
+      const rStream = $('rStream'), rEmpty = $('rEmpty');
+      const hlTerms = active ? active.terms : (q ? [q] : null);
+      if (items.length === 0) {
+        rStream.innerHTML = '';
+        rEmpty.style.display = 'block';
+        rEmpty.textContent = stream.length === 0
+          ? 'Once you start logging thoughts on your reading, the shape of your thinking shows up here.'
+          : 'No thoughts match this.';
+        return;
+      }
+      rEmpty.style.display = 'none';
+      rStream.innerHTML = items.map((s) => {
+        const e = s.entry;
+        const badge = `<span class="badge ${e.status}">${STATUS_LABEL[e.status] || e.status}</span>`;
+        const fup = s.followup ? `<span class="stream-fup">↳ follow-up</span><span class="stream-dot">·</span>` : '';
+        const rootRef = s.followup
+          ? `<div class="stream-rootref">revisiting: ${esc(s.rootGist.length > 90 ? s.rootGist.slice(0, 90) + '…' : s.rootGist)}</div>`
+          : '';
+        return `<li class="stream-item">
+          <div class="stream-meta">
+            ${fup}<span class="stream-src">${esc(e.title)}</span>
+            <span class="stream-dot">·</span>${badge}
+            <span class="stream-dot">·</span><span>${fmtDate(s.at)}</span>
+          </div>
+          <div class="stream-body">${highlight(s.body, hlTerms)}</div>
+          ${rootRef}
+        </li>`;
+      }).join('');
+    }
+
+    // View switching.
+    function switchView(view) {
+      document.querySelectorAll('.vs-btn').forEach((b) =>
+        b.classList.toggle('active', b.dataset.view === view));
+      $('libraryView').style.display = view === 'library' ? '' : 'none';
+      $('reflectionsView').style.display = view === 'reflections' ? '' : 'none';
+      if (view === 'reflections') loadReflections();
+      else load();
+    }
+    document.querySelectorAll('.vs-btn').forEach((b) =>
+      b.addEventListener('click', () => switchView(b.dataset.view)));
+
+    $('rSearch').addEventListener('input', drawReflections);
+    $('rThemes').addEventListener('click', (e) => {
+      const key = e.target.closest('[data-bucket]')?.getAttribute('data-bucket');
+      const clear = e.target.closest('[data-bucket-clear]');
+      if (clear) { reflect.activeBucket = null; drawReflections(); return; }
+      if (key) { reflect.activeBucket = reflect.activeBucket === key ? null : key; drawReflections(); }
+    });
+
+    // ============ Authentication ============
+    let authMode = 'login';   // 'login' | 'register'
+
+    function showApp(username) {
+      $('whoami').textContent = `Signed in as ${username}`;
+      $('authScreen').style.display = 'none';
+      $('appRoot').hidden = false;
+      load();
+    }
+    function showAuth() {
+      $('appRoot').hidden = true;
+      $('authScreen').style.display = 'flex';
+      $('authError').textContent = '';
+      $('authPass').value = '';
+      $('authUser').focus();
+    }
+    // Any protected call can hit this if the session has expired.
+    function onUnauthorized() { showAuth(); }
+
+    function setAuthMode(mode) {
+      authMode = mode;
+      $('tabLogin').classList.toggle('active', mode === 'login');
+      $('tabRegister').classList.toggle('active', mode === 'register');
+      $('authSubmit').textContent = mode === 'login' ? 'Log in' : 'Create account';
+      $('authPass').setAttribute('autocomplete', mode === 'login' ? 'current-password' : 'new-password');
+      $('authHint').textContent = mode === 'login'
+        ? 'New here? Create an account — your library is visible only to you.'
+        : 'Pick a username (3–32 chars) and a password of at least 8 characters.';
+      $('authError').textContent = '';
+    }
+    $('tabLogin').onclick = () => setAuthMode('login');
+    $('tabRegister').onclick = () => setAuthMode('register');
+
+    $('authForm').onsubmit = async (e) => {
+      e.preventDefault();
+      const username = $('authUser').value.trim();
+      const password = $('authPass').value;
+      $('authError').textContent = '';
+      if (!username || !password) { $('authError').textContent = 'Enter a username and password.'; return; }
+      let res;
+      try {
+        res = await fetch(`/api/${authMode}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+      } catch {
+        $('authError').textContent = 'Could not reach the server.'; return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { $('authError').textContent = data.error || 'Something went wrong.'; return; }
+      showApp(data.user.username);
+    };
+
+    $('logoutBtn').onclick = async () => {
+      await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+      showAuth();
+    };
+
+    // On load, ask the server who (if anyone) is logged in.
+    (async () => {
+      try {
+        const res = await fetch('/api/me');
+        if (res.ok) { const { user } = await res.json(); showApp(user.username); }
+        else showAuth();
+      } catch { showAuth(); }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# Never commit the local database (contains password hashes + everyone's data)
+reading.db
+reading.db-shm
+reading.db-wal
+demo.db
+
+node_modules
+*.log
+.DS_Store
+.claude
