@@ -1,4 +1,4 @@
-# 📚 Reading Tracker
+# 📚 Papertrail
 
 A personal reading tracker with a **real database**. Track books, articles, papers,
 and other media — what you want to read, what you're reading, and what you've

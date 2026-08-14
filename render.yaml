@@ -3,7 +3,7 @@
 # the two Turso values (URL + token); everything else is set here.
 services:
   - type: web
-    name: reading-tracker
+    name: papertrail
     runtime: node
     plan: free
     buildCommand: npm install
