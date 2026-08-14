@@ -1,0 +1,19 @@
+# Render Blueprint — lets Render auto-configure the web service.
+# In Render: New + → Blueprint → pick this repo. You'll only be asked to fill in
+# the two Turso values (URL + token); everything else is set here.
+services:
+  - type: web
+    name: reading-tracker
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: SECURE_COOKIES
+        value: "1"
+      - key: NODE_VERSION
+        value: "24"
+      - key: TURSO_DATABASE_URL
+        sync: false   # you paste your Turso database URL here in Render
+      - key: TURSO_AUTH_TOKEN
+        sync: false   # you paste your Turso token here in Render (secret)
