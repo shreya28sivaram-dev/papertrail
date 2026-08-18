@@ -70,6 +70,7 @@ async function initDb() {
       reflections TEXT    NOT NULL DEFAULT '',
       cover_url   TEXT    NOT NULL DEFAULT '',
       pages       INTEGER NOT NULL DEFAULT 0,
+      position    INTEGER NOT NULL DEFAULT 0,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
       updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
     );
@@ -94,6 +95,23 @@ async function initDb() {
   await addColumnIfMissing('entries', 'cover_url', "ALTER TABLE entries ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing('entries', 'pages', 'ALTER TABLE entries ADD COLUMN pages INTEGER NOT NULL DEFAULT 0');
   await addColumnIfMissing('entries', 'user_id', 'ALTER TABLE entries ADD COLUMN user_id INTEGER REFERENCES users(id)');
+
+  // Manual shelf order. When first added, seed positions per user by recency so
+  // "My arrangement" starts out matching the recently-updated view.
+  {
+    const hasPosition = (await dbAll('PRAGMA table_info(entries)')).some((c) => c.name === 'position');
+    if (!hasPosition) {
+      await client.execute('ALTER TABLE entries ADD COLUMN position INTEGER NOT NULL DEFAULT 0');
+      const rows = await dbAll('SELECT id, user_id FROM entries ORDER BY user_id, updated_at DESC, id DESC');
+      const counter = {};
+      for (const r of rows) {
+        const k = r.user_id ?? 'null';
+        counter[k] = counter[k] ?? 0;
+        await dbRun('UPDATE entries SET position = ? WHERE id = ?', [counter[k], r.id]);
+        counter[k]++;
+      }
+    }
+  }
 
   // Fold any legacy single "reflections" text into the notes log.
   const legacy = await dbAll(`SELECT id, reflections, created_at FROM entries WHERE TRIM(reflections) <> ''`);
@@ -309,12 +327,26 @@ async function getEntry(userId, id) {
 async function createEntry(userId, input) {
   const e = sanitize(input);
   if (!e.title) throw { code: 400, message: 'Title is required' };
+  const { m } = await dbGet('SELECT COALESCE(MAX(position), -1) AS m FROM entries WHERE user_id = ?', [userId]);
   const info = await dbRun(
-    `INSERT INTO entries (user_id, title, type, author, status, cover_url, pages)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [userId, e.title, e.type, e.author, e.status, e.cover_url, e.pages]
+    `INSERT INTO entries (user_id, title, type, author, status, cover_url, pages, position)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [userId, e.title, e.type, e.author, e.status, e.cover_url, e.pages, Number(m) + 1]
   );
   return getEntry(userId, info.lastInsertRowid);
+}
+
+// Save a manual left-to-right arrangement of the user's books.
+async function reorderEntries(userId, order) {
+  if (!Array.isArray(order)) throw { code: 400, message: 'order must be an array of ids' };
+  let pos = 0;
+  for (const rawId of order) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id)) continue;
+    await dbRun('UPDATE entries SET position = ? WHERE id = ? AND user_id = ?', [pos, id, userId]);
+    pos++;
+  }
+  return { ok: true };
 }
 
 async function updateEntry(userId, id, input) {
@@ -611,6 +643,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (path === '/api/book-lookup' && method === 'GET') {
         return sendJSON(res, 200, await lookupBook(url.searchParams.get('title')));
+      }
+      if (path === '/api/entries/reorder' && method === 'POST') {
+        return sendJSON(res, 200, await reorderEntries(user.id, (await readBody(req)).order));
       }
 
       const noteAdd = path.match(/^\/api\/entries\/(\d+)\/notes$/);

@@ -186,6 +186,9 @@
       transition: transform .13s ease;
     }
     .spine:hover, .spine:focus-visible { transform: translateY(-10px); outline: none; }
+    .spine { cursor: grab; }
+    .spine:active { cursor: grabbing; }
+    .spine.dragging { opacity: .35; transform: none; }
     /* Woven bookcloth for spines without a cover. */
     .spine:not(.has-cover) {
       background-image:
@@ -536,6 +539,7 @@
           <option value="other">Other media</option>
         </select>
         <select id="sortBy" class="filter" title="Arrange the shelf">
+          <option value="custom">My arrangement</option>
           <option value="updated">Recently updated</option>
           <option value="added">Recently added</option>
           <option value="title">Title (A–Z)</option>
@@ -825,7 +829,7 @@
         const art = e.cover_url
           ? `<span class="spine-art" style="background-image:url('${esc(e.cover_url)}')"></span><span class="spine-tint"></span>`
           : '';
-        return `<button class="spine${e.cover_url ? ' has-cover' : ''}" data-open="${e.id}" title="${esc(label)}"
+        return `<button class="spine${e.cover_url ? ' has-cover' : ''}" data-open="${e.id}" draggable="true" title="${esc(label)}"
           style="--w:${w}px; --spine:${bg}; --spine-ink:${ink}; --status:${st};">
           ${art}
           <span class="spine-band"></span>
@@ -837,12 +841,13 @@
 
     // Shelf arrangement.
     function sortEntries(arr) {
-      const by = ($('sortBy') && $('sortBy').value) || 'updated';
+      const by = ($('sortBy') && $('sortBy').value) || 'custom';
       const a = arr.slice();
       const rank = { reading: 0, want: 1, finished: 2 };
       const cmpTitle = (x, y) =>
         (x.title || '').localeCompare(y.title || '', undefined, { sensitivity: 'base' });
-      if (by === 'added') a.sort((x, y) => y.id - x.id);
+      if (by === 'custom') a.sort((x, y) => ((x.position || 0) - (y.position || 0)) || (y.id - x.id));
+      else if (by === 'added') a.sort((x, y) => y.id - x.id);
       else if (by === 'title') a.sort(cmpTitle);
       else if (by === 'author') a.sort((x, y) =>
         (x.author || '￿').localeCompare(y.author || '￿', undefined, { sensitivity: 'base' }) || cmpTitle(x, y));
@@ -1105,11 +1110,59 @@
       await load();
     }
 
-    // A click on a shelf spine opens that book.
+    // A click on a shelf spine opens that book (unless we just finished a drag).
+    let justDragged = false;
     list.addEventListener('click', (e) => {
+      if (justDragged) return;
       const id = e.target.closest('[data-open]')?.getAttribute('data-open');
       if (id) openBook(id);
     });
+
+    // ===== Drag to rearrange the shelf =====
+    let dragEl = null;
+    list.addEventListener('dragstart', (e) => {
+      const sp = e.target.closest('.spine');
+      if (!sp) return;
+      dragEl = sp;
+      justDragged = false;
+      sp.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', sp.getAttribute('data-open')); } catch {}
+    });
+    list.addEventListener('dragover', (e) => {
+      if (!dragEl) return;
+      e.preventDefault();
+      const over = e.target.closest('.spine');
+      if (!over || over === dragEl) return;
+      const rect = over.getBoundingClientRect();
+      const before = (e.clientX - rect.left) < rect.width / 2;
+      list.insertBefore(dragEl, before ? over : over.nextSibling);
+      justDragged = true;   // a real drag happened → suppress the click that follows
+    });
+    list.addEventListener('dragend', async () => {
+      if (!dragEl) return;
+      dragEl.classList.remove('dragging');
+      dragEl = null;
+      if (!justDragged) return;
+      const ids = [...list.querySelectorAll('.spine')].map((s) => Number(s.getAttribute('data-open')));
+      await saveOrder(ids);
+      setTimeout(() => { justDragged = false; }, 0);
+    });
+
+    async function saveOrder(ids) {
+      // reflect new positions locally + switch to "My arrangement" so it sticks
+      ids.forEach((id, i) => { const e = entries.find((x) => x.id === id); if (e) e.position = i; });
+      $('sortBy').value = 'custom';
+      try { localStorage.setItem('ptSort', 'custom'); } catch {}
+      render();
+      try {
+        await fetch('/api/entries/reorder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ order: ids }),
+        });
+      } catch { toast('Could not save the new order.'); }
+    }
 
     // Entry + notes actions live inside the open-book panel.
     bookBody.addEventListener('click', async (e) => {
@@ -1176,7 +1229,10 @@
     });
     $('statusFilter').addEventListener('change', render);
     $('typeFilter').addEventListener('change', render);
-    $('sortBy').addEventListener('change', render);
+    $('sortBy').addEventListener('change', () => {
+      try { localStorage.setItem('ptSort', $('sortBy').value); } catch {}
+      render();
+    });
 
     // ============ Reflections view ============
     const reflect = { stream: [], buckets: [], activeBucket: null };
@@ -1379,6 +1435,7 @@
       $('whoami').textContent = `Signed in as ${username}`;
       $('authScreen').style.display = 'none';
       $('appRoot').hidden = false;
+      try { const s = localStorage.getItem('ptSort'); if (s) $('sortBy').value = s; } catch {}
       load();
     }
     function showAuth() {
