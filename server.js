@@ -518,6 +518,21 @@ async function englishAuthorName(doc) {
   return tidyName(latinInArray || names[nonLatinIdx]);
 }
 
+// Does a result's title actually match what the user searched? (Substring either
+// way, or strong word overlap.) Guards against unrelated books coming back for
+// niche titles the sources don't have.
+const titleTokens = (s) => new Set(norm(s).split(' ').filter(Boolean));
+function titleMatches(query, candidateTitle) {
+  const nq = norm(query), nt = norm(candidateTitle);
+  if (!nq || !nt) return false;
+  if (nt.includes(nq) || nq.includes(nt)) return true;
+  const A = titleTokens(query), B = titleTokens(candidateTitle);
+  if (!A.size || !B.size) return false;
+  let hit = 0;
+  for (const t of A) if (B.has(t)) hit++;
+  return hit / Math.min(A.size, B.size) >= 0.6;
+}
+
 // Return up to `max` distinct candidate matches for a title, each with an
 // English author, a cover, and a year — so the UI can offer a chooser. The best
 // guess is candidates[0]; the rest are alternatives (other editions/books that
@@ -544,14 +559,24 @@ async function lookupBook(title, max = 4) {
     if (!prev || (d.edition_count || 0) > (prev.edition_count || 0)) byKey.set(key, d);
   }
   const nq = norm(q);
-  const uniq = [...byKey.values()].sort((a, b) => {
+  const ranked = [...byKey.values()].sort((a, b) => {
     // Exact title matches first, then by number of editions (canonical works).
     const ax = norm(a.title) === nq ? 1 : 0, bx = norm(b.title) === nq ? 1 : 0;
     return (bx - ax) || ((b.edition_count || 0) - (a.edition_count || 0));
-  }).slice(0, max);
+  });
+
+  // Only trust title-matching results. Exception: a famous work whose title is in
+  // another script (e.g. Murakami's 海辺のカフカ for "Kafka on the Shore") — allowed
+  // when it has many editions and a non-Latin author.
+  let accepted = ranked.filter((d) => titleMatches(q, d.title));
+  if (!accepted.length && ranked[0]
+      && (ranked[0].edition_count || 0) >= 10
+      && (ranked[0].author_name || []).some((n) => NON_LATIN.test(n))) {
+    accepted = [ranked[0]];
+  }
 
   const candidates = [];
-  for (const d of uniq) {
+  for (const d of accepted.slice(0, max)) {
     candidates.push({
       source: 'Open Library',
       title: d.title || q,
@@ -563,12 +588,14 @@ async function lookupBook(title, max = 4) {
   }
   if (candidates.length) return { found: true, candidates };
 
-  // 2) Google Books fallback — key-free basic volume search.
+  // 2) Google Books fallback — better for recent/niche titles (key-free, limited
+  // quota). Still require a title match so we never return an unrelated book.
   const gb = await fetchJSON(
     `https://www.googleapis.com/books/v1/volumes?q=intitle:${encodeURIComponent(q)}&maxResults=${max}`
   );
   for (const it of ((gb && gb.items) || [])) {
     const v = it.volumeInfo || {};
+    if (!titleMatches(q, v.title || '')) continue;
     const img = v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail);
     candidates.push({
       source: 'Google Books',
