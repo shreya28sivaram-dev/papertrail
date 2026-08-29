@@ -380,6 +380,53 @@
       color: var(--muted); font-weight: 700; margin-bottom: 12px;
     }
     .r-block { margin-bottom: 30px; }
+
+    /* Discover view */
+    .d-head {
+      display: flex; align-items: flex-end; justify-content: space-between;
+      gap: 20px; flex-wrap: wrap; margin: 20px 2px 22px;
+    }
+    .d-title { font-family: var(--font-display); font-size: 24px; color: var(--ink); }
+    .d-sub { color: var(--muted); font-size: 14px; margin-top: 3px; }
+    .d-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .d-notes { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .d-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 20px;
+    }
+    .rec-card {
+      background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    }
+    .rec-top { display: flex; gap: 14px; }
+    .rec-cover {
+      width: 64px; height: 96px; flex: none; border-radius: 3px; object-fit: cover;
+      background: linear-gradient(135deg, var(--accent-soft), var(--line));
+      box-shadow: 0 2px 6px rgba(60,45,30,.25);
+    }
+    .rec-cover.placeholder {
+      display: flex; align-items: center; justify-content: center; text-align: center;
+      font-family: var(--font-display); font-size: 11px; color: var(--muted); padding: 6px; line-height: 1.25;
+    }
+    .rec-meta { min-width: 0; }
+    .rec-title { font-family: var(--font-display); font-size: 17px; color: var(--ink); line-height: 1.25; }
+    .rec-author { color: var(--muted); font-size: 13px; margin-top: 2px; }
+    .rec-pages { color: var(--muted); font-size: 12px; margin-top: 4px; opacity: .8; }
+    .rec-reason { font-size: 14px; line-height: 1.5; color: var(--ink); font-style: italic; }
+    .rec-add {
+      align-self: flex-start; margin-top: auto; background: var(--accent); color: #fff;
+      border: none; border-radius: var(--radius); padding: 8px 14px; cursor: pointer;
+      font-family: var(--font-body); font-size: 14px;
+    }
+    .rec-add:hover { filter: brightness(1.08); }
+    .rec-add:disabled { background: var(--reading); cursor: default; filter: none; }
+    .d-loading { display: flex; align-items: center; gap: 12px; color: var(--muted); padding: 30px 2px; font-style: italic; }
+    .d-spinner {
+      width: 20px; height: 20px; border: 2px solid var(--line); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .8s linear infinite; flex: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
     .r-themes { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
     .theme-chip {
       background: var(--accent-soft); color: var(--accent); border: 1px solid transparent;
@@ -545,6 +592,7 @@
     <div class="viewswitch">
       <button class="vs-btn active" data-view="library">Library</button>
       <button class="vs-btn" data-view="reflections">Reflections</button>
+      <button class="vs-btn" data-view="discover">Discover</button>
     </div>
 
     <!-- Library view -->
@@ -608,6 +656,22 @@
         <ul class="r-stream" id="rStream"></ul>
         <div class="empty" id="rEmpty" style="display:none"></div>
       </div>
+    </div>
+
+    <!-- Discover view -->
+    <div id="discoverView" style="display:none">
+      <div class="d-head">
+        <div>
+          <div class="d-title">Books picked for you</div>
+          <div class="d-sub">Drawn from the themes, authors, and genres on your shelf.</div>
+        </div>
+        <div class="d-controls">
+          <label class="d-notes"><input type="checkbox" id="recNotes" /> Use my notes for better picks</label>
+          <button class="btn-primary" id="recRefresh">✦ Suggest books</button>
+        </div>
+      </div>
+      <div class="d-grid" id="recGrid"></div>
+      <div class="empty" id="recEmpty" style="display:none"></div>
     </div>
   </main>
   </div><!-- /#appRoot -->
@@ -1475,11 +1539,110 @@
         b.classList.toggle('active', b.dataset.view === view));
       $('libraryView').style.display = view === 'library' ? '' : 'none';
       $('reflectionsView').style.display = view === 'reflections' ? '' : 'none';
+      $('discoverView').style.display = view === 'discover' ? '' : 'none';
       if (view === 'reflections') loadReflections();
+      else if (view === 'discover') { if (!recLoadedOnce) loadRecommendations(); }
       else load();
     }
     document.querySelectorAll('.vs-btn').forEach((b) =>
       b.addEventListener('click', () => switchView(b.dataset.view)));
+
+    // ============ Discover (AI recommendations) ============
+    let recLoadedOnce = false;
+    let recAdded = new Set();   // normalized titles already added this session
+
+    const recNorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    async function loadRecommendations() {
+      recLoadedOnce = true;
+      const grid = $('recGrid'), empty = $('recEmpty');
+      empty.style.display = 'none';
+      grid.innerHTML =
+        '<div class="d-loading"><div class="d-spinner"></div>Reading your shelf and finding books you\'ll love…</div>';
+      $('recRefresh').disabled = true;
+      try {
+        const useNotes = $('recNotes').checked ? '?notes=1' : '';
+        const res = await fetch('/api/recommendations' + useNotes);
+        if (res.status === 401) return onUnauthorized();
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Something went wrong.');
+        renderRecommendations(data);
+      } catch (err) {
+        grid.innerHTML = '';
+        empty.style.display = '';
+        empty.innerHTML =
+          `<p>${esc(err.message || 'Could not load recommendations.')}</p>` +
+          '<p style="margin-top:10px"><button class="btn-primary" id="recRetry">Try again</button></p>';
+        $('recRetry')?.addEventListener('click', loadRecommendations);
+      } finally {
+        $('recRefresh').disabled = false;
+      }
+    }
+
+    function renderRecommendations(data) {
+      const grid = $('recGrid'), empty = $('recEmpty');
+      const recs = (data && data.recommendations) || [];
+      if (!recs.length) {
+        grid.innerHTML = '';
+        empty.style.display = '';
+        empty.innerHTML = `<p>${esc(data.message || 'No suggestions right now — add a few more books and try again.')}</p>`;
+        return;
+      }
+      empty.style.display = 'none';
+      grid.innerHTML = recs.map((r) => {
+        const key = recNorm(r.title);
+        const added = recAdded.has(key);
+        const cover = r.cover_url
+          ? `<img class="rec-cover" src="${esc(r.cover_url)}" alt="" loading="lazy"
+                 onerror="this.classList.add('placeholder');this.removeAttribute('src');this.textContent=this.alt=${JSON.stringify(r.title)}">`
+          : `<div class="rec-cover placeholder">${esc(r.title)}</div>`;
+        const pages = r.pages ? `<div class="rec-pages">${r.pages} pages${r.year ? ' · ' + r.year : ''}</div>`
+                              : (r.year ? `<div class="rec-pages">${r.year}</div>` : '');
+        return `<div class="rec-card">
+          <div class="rec-top">
+            ${cover}
+            <div class="rec-meta">
+              <div class="rec-title">${esc(r.title)}</div>
+              ${r.author ? `<div class="rec-author">${esc(r.author)}</div>` : ''}
+              ${pages}
+            </div>
+          </div>
+          ${r.reason ? `<div class="rec-reason">${esc(r.reason)}</div>` : ''}
+          <button class="rec-add" data-rec='${esc(JSON.stringify({ title: r.title, author: r.author, cover_url: r.cover_url, pages: r.pages }))}' ${added ? 'disabled' : ''}>
+            ${added ? '✓ On your shelf' : '+ Add to want-to-read'}
+          </button>
+        </div>`;
+      }).join('');
+    }
+
+    $('recRefresh').addEventListener('click', loadRecommendations);
+    $('recGrid').addEventListener('click', async (e) => {
+      const btn = e.target.closest('.rec-add');
+      if (!btn || btn.disabled) return;
+      let rec;
+      try { rec = JSON.parse(btn.dataset.rec); } catch { return; }
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      try {
+        const res = await fetch(api, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: rec.title, author: rec.author || '', type: 'book', status: 'want',
+            cover_url: rec.cover_url || '', pages: rec.pages || null,
+          }),
+        });
+        if (res.status === 401) return onUnauthorized();
+        if (!res.ok) throw new Error('Could not add');
+        recAdded.add(recNorm(rec.title));
+        btn.textContent = '✓ On your shelf';
+        toast(`Added “${rec.title}” to Want to read`);
+      } catch {
+        btn.disabled = false;
+        btn.textContent = '+ Add to want-to-read';
+        toast('Could not add that book. Try again.');
+      }
+    });
 
     $('rSearch').addEventListener('input', drawReflections);
     $('rThemes').addEventListener('click', (e) => {

@@ -16,6 +16,10 @@ const SECURE_COOKIES = process.env.SECURE_COOKIES === '1' || process.env.SECURE_
 // DB_PATH lets the database live on a persistent volume in production; locally it
 // defaults to a file next to this server.
 const DB_PATH = process.env.DB_PATH || join(__dirname, 'reading.db');
+// GEMINI_API_KEY powers the AI book recommender. If unset, /api/recommendations
+// returns a friendly "not configured" message instead of erroring.
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 // --- Database (libSQL / Turso) --------------------------------------------
 // Uses a hosted Turso database in production (TURSO_DATABASE_URL + auth token),
@@ -634,6 +638,131 @@ async function lookupBook(title, max = 4) {
   return { found: candidates.length > 0, candidates };
 }
 
+// --- AI recommendations ---------------------------------------------------
+// Calls Gemini once and returns the model's text output (parts joined). Throws
+// { code, message } on failure so the router surfaces a clean status.
+async function callGemini(prompt) {
+  if (!GEMINI_API_KEY) {
+    throw { code: 503, message: 'Recommendations aren’t configured yet (no GEMINI_API_KEY).' };
+  }
+  let resp;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 45000);
+  try {
+    resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.9 },
+        }),
+        signal: ctrl.signal,
+      }
+    );
+  } catch {
+    throw { code: 503, message: 'The recommender took too long to respond — try again in a moment.' };
+  } finally {
+    clearTimeout(timer);
+  }
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    // 503/429 from the free tier are transient — tell the user to retry.
+    const transient = resp.status === 503 || resp.status === 429;
+    throw {
+      code: transient ? 503 : 502,
+      message: transient
+        ? 'The recommender is busy right now — give it a few seconds and try again.'
+        : (data?.error?.message || 'The recommendation service returned an error.'),
+    };
+  }
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  return parts.map((p) => p.text || '').join('').trim();
+}
+
+// Builds a compact profile from the user's library, asks Gemini for books they
+// don't already own, then grounds each suggestion against the real book
+// databases so the covers/authors/pages are accurate (never trust the LLM's
+// metadata). `useNotes` opts into sending short note snippets for richer recs.
+async function recommendBooks(userId, useNotes = false) {
+  const entries = await listEntries(userId);
+  if (!entries.length) {
+    return { recommendations: [], message: 'Add a few books to your shelf first — then I can suggest what to read next.' };
+  }
+
+  const owned = new Set(entries.map((e) => norm(e.title)));
+  const lines = entries.slice(0, 60).map((e) => {
+    const status = e.status === 'finished' ? 'read' : e.status === 'reading' ? 'reading now' : 'want to read';
+    let line = `- "${e.title}"${e.author ? ' by ' + e.author : ''} (${e.type}, ${status})`;
+    if (useNotes) {
+      const snippet = (e.notes || [])
+        .map((n) => n.body)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .slice(0, 220);
+      if (snippet) line += ` — my notes: ${snippet}`;
+    }
+    return line;
+  });
+
+  const prompt = [
+    'You are a well-read librarian giving personal book recommendations.',
+    'Here is a reader\'s library (what they have read, are reading, and want to read):',
+    '',
+    lines.join('\n'),
+    '',
+    'Recommend 6 books this reader would likely love next, based on the themes, authors,',
+    'genres, and tastes visible above' + (useNotes ? ', and especially their notes/reflections' : '') + '.',
+    'Rules:',
+    '- Only real, published books with correct titles and authors.',
+    '- Do NOT recommend any book already in their library above.',
+    '- Vary the picks; do not recommend six books by the same author.',
+    '- For each, write a warm, specific 1-2 sentence reason tied to THEIR library.',
+    'Return ONLY JSON of this exact shape:',
+    '{"recommendations":[{"title":"...","author":"...","reason":"..."}]}',
+  ].join('\n');
+
+  const raw = await callGemini(prompt);
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    const m = raw.match(/\{[\s\S]*\}/);
+    parsed = m ? JSON.parse(m[0]) : { recommendations: [] };
+  }
+  const suggestions = Array.isArray(parsed?.recommendations) ? parsed.recommendations : [];
+
+  // Ground each suggestion against the real book databases (for covers/pages)
+  // and drop anything the reader already owns.
+  const out = [];
+  const seen = new Set();
+  for (const s of suggestions) {
+    const title = String(s?.title || '').trim();
+    if (!title) continue;
+    const key = norm(title);
+    if (owned.has(key) || seen.has(key)) continue;
+    seen.add(key);
+
+    let cover_url = '', pages = null, author = String(s?.author || '').trim(), year = null;
+    try {
+      const look = await lookupBook(title, 1);
+      const c = look.found && look.candidates[0];
+      if (c && titleMatches(title, c.title)) {
+        cover_url = c.cover_url || '';
+        pages = c.pages || null;
+        year = c.year || null;
+        if (c.author) author = c.author;
+      }
+    } catch { /* enrichment is best-effort */ }
+
+    out.push({ title, author, reason: String(s?.reason || '').trim(), cover_url, pages, year });
+    if (out.length >= 6) break;
+  }
+
+  return { recommendations: out };
+}
+
 // --- Static file serving --------------------------------------------------
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -704,6 +833,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (path === '/api/book-lookup' && method === 'GET') {
         return sendJSON(res, 200, await lookupBook(url.searchParams.get('title')));
+      }
+      if (path === '/api/recommendations' && method === 'GET') {
+        const useNotes = url.searchParams.get('notes') === '1';
+        return sendJSON(res, 200, await recommendBooks(user.id, useNotes));
       }
       if (path === '/api/entries/reorder' && method === 'POST') {
         return sendJSON(res, 200, await reorderEntries(user.id, (await readBody(req)).order));
