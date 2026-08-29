@@ -51,6 +51,8 @@ async function initDb() {
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
       username      TEXT    NOT NULL UNIQUE,
       password_hash TEXT    NOT NULL,
+      is_public     INTEGER NOT NULL DEFAULT 0,
+      notes_public  INTEGER NOT NULL DEFAULT 0,
       created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -91,6 +93,8 @@ async function initDb() {
     const cols = await dbAll(`PRAGMA table_info(${table})`);
     if (!cols.some((c) => c.name === column)) await client.execute(ddl);
   };
+  await addColumnIfMissing('users', 'is_public', 'ALTER TABLE users ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0');
+  await addColumnIfMissing('users', 'notes_public', 'ALTER TABLE users ADD COLUMN notes_public INTEGER NOT NULL DEFAULT 0');
   await addColumnIfMissing('notes', 'parent_id', 'ALTER TABLE notes ADD COLUMN parent_id INTEGER REFERENCES notes(id)');
   await addColumnIfMissing('entries', 'cover_url', "ALTER TABLE entries ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''");
   await addColumnIfMissing('entries', 'pages', 'ALTER TABLE entries ADD COLUMN pages INTEGER NOT NULL DEFAULT 0');
@@ -201,7 +205,7 @@ async function currentUser(req) {
   const token = parseCookies(req).sid;
   if (!token) return null;
   const row = await dbGet(
-    `SELECT s.expires_at, u.id, u.username
+    `SELECT s.expires_at, u.id, u.username, u.is_public, u.notes_public
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ?`,
     [sha256(token)]
@@ -211,7 +215,7 @@ async function currentUser(req) {
     await dbRun('DELETE FROM sessions WHERE token_hash = ?', [sha256(token)]);
     return null;
   }
-  return { id: row.id, username: row.username };
+  return { id: row.id, username: row.username, is_public: !!row.is_public, notes_public: !!row.notes_public };
 }
 
 async function registerUser(input, res) {
@@ -231,7 +235,7 @@ async function registerUser(input, res) {
   // The very first account inherits any pre-existing, unowned library.
   if (firstUser) await dbRun('UPDATE entries SET user_id = ? WHERE user_id IS NULL', [userId]);
   setSessionCookie(res, await createSession(userId));
-  return { user: { id: userId, username } };
+  return { user: { id: userId, username, is_public: false, notes_public: false } };
 }
 
 async function loginUser(input, res) {
@@ -243,7 +247,7 @@ async function loginUser(input, res) {
     throw { code: 401, message: 'Invalid username or password' };
   }
   setSessionCookie(res, await createSession(user.id));
-  return { user: { id: user.id, username: user.username } };
+  return { user: { id: user.id, username: user.username, is_public: !!user.is_public, notes_public: !!user.notes_public } };
 }
 
 async function logoutUser(req, res) {
@@ -251,6 +255,27 @@ async function logoutUser(req, res) {
   if (token) await dbRun('DELETE FROM sessions WHERE token_hash = ?', [sha256(token)]);
   clearSessionCookie(res);
   return { ok: true };
+}
+
+// Update the current user's shelf-sharing settings.
+async function updateShareSettings(userId, input) {
+  const isPub = input.is_public ? 1 : 0;
+  const notesPub = input.notes_public ? 1 : 0;
+  await dbRun('UPDATE users SET is_public = ?, notes_public = ? WHERE id = ?', [isPub, notesPub, userId]);
+  return { is_public: !!isPub, notes_public: !!notesPub };
+}
+
+// Public, read-only view of a user's shelf (no auth). Notes included only if the
+// owner opted in. Throws 404 if the shelf isn't shared (privacy by default).
+async function publicShelf(username) {
+  const u = await dbGet(
+    'SELECT id, username, is_public, notes_public FROM users WHERE username = ?',
+    [String(username ?? '').trim().toLowerCase()]
+  );
+  if (!u || !u.is_public) throw { code: 404, message: 'This shelf is private or does not exist' };
+  const rows = await dbAll('SELECT * FROM entries WHERE user_id = ? ORDER BY position ASC, id DESC', [u.id]);
+  const books = u.notes_public ? await attachNotes(rows) : rows.map((r) => ({ ...r, notes: [] }));
+  return { username: u.username, notes_public: !!u.notes_public, books };
 }
 
 function sanitize(input) {
@@ -656,11 +681,20 @@ const server = http.createServer(async (req, res) => {
       const u = await currentUser(req);
       return u ? sendJSON(res, 200, { user: u }) : sendJSON(res, 401, { error: 'Not logged in' });
     }
+    // Public, read-only shelf — no auth.
+    const pub = path.match(/^\/api\/public\/([^/]+)$/);
+    if (pub && method === 'GET') {
+      return sendJSON(res, 200, await publicShelf(decodeURIComponent(pub[1])));
+    }
 
     // ---- Everything else under /api requires a logged-in user ----
     if (path.startsWith('/api/')) {
       const user = await currentUser(req);
       if (!user) return sendJSON(res, 401, { error: 'Not logged in' });
+
+      if (path === '/api/me/settings' && method === 'POST') {
+        return sendJSON(res, 200, await updateShareSettings(user.id, await readBody(req)));
+      }
 
       if (path === '/api/entries' && method === 'GET') {
         return sendJSON(res, 200, await listEntries(user.id, url.searchParams.get('search')));
@@ -698,6 +732,12 @@ const server = http.createServer(async (req, res) => {
       }
 
       return sendJSON(res, 404, { error: 'Not found' });
+    }
+
+    // Public shelf links (/u/<username>) are handled by the same single-page app.
+    if (/^\/u\/[^/]+\/?$/.test(path)) {
+      req.url = '/index.html';
+      return serveStatic(req, res);
     }
 
     return serveStatic(req, res);

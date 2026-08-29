@@ -95,6 +95,30 @@
     .overlay.confirm-overlay { z-index: 60; }
     .confirm-modal { max-width: 400px; }
     .confirm-msg { margin: 0; font-size: 15px; line-height: 1.5; }
+    /* Share modal */
+    .share-modal { max-width: 440px; }
+    .share-modal h2 { margin: 0 0 14px; font-size: 20px; }
+    .share-row { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 14px; font-size: 14px; cursor: pointer; }
+    .share-row input[type="checkbox"] { margin-top: 3px; width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--accent); }
+    .share-link-row { display: flex; gap: 8px; }
+    .share-link-row input {
+      flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--bg); color: var(--ink); font: inherit; font-size: 13px;
+    }
+    /* Public read-only shelf: hide all editing/controls */
+    body.public-mode .userbar #whoami,
+    body.public-mode #shareBtn,
+    body.public-mode #logoutBtn,
+    body.public-mode .toolbar,
+    body.public-mode .viewswitch,
+    body.public-mode .spine-band ~ * ~ .book-actions,
+    body.public-mode .book-actions,
+    body.public-mode .note-del,
+    body.public-mode .thread-actions,
+    body.public-mode .followup-form,
+    body.public-mode .note-add { display: none !important; }
+    body.public-mode #makeOwnLink { display: inline-block !important; }
+    body.public-mode .spine { cursor: pointer; }
     .toast {
       position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
       background: var(--ink); color: var(--bg); padding: 11px 18px; border-radius: 10px;
@@ -507,9 +531,14 @@
 
   <div id="appRoot" hidden>
   <header>
-    <div class="userbar"><span id="whoami"></span><button type="button" class="btn-ghost" id="logoutBtn">Log out</button></div>
-    <h1>📚 Papertrail</h1>
-    <p>Everything you're reading, want to read, and have finished — with your reflections.</p>
+    <div class="userbar">
+      <span id="whoami"></span>
+      <button type="button" class="btn-ghost" id="shareBtn">Share shelf</button>
+      <button type="button" class="btn-ghost" id="logoutBtn">Log out</button>
+      <a class="btn-ghost" id="makeOwnLink" href="/" style="display:none;">Make your own →</a>
+    </div>
+    <h1 id="appTitle">📚 Papertrail</h1>
+    <p id="appTagline">Everything you're reading, want to read, and have finished — with your reflections.</p>
   </header>
 
   <main>
@@ -662,6 +691,32 @@
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="confirmCancel">Cancel</button>
         <button type="button" class="btn-danger" id="confirmOk">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share-shelf settings -->
+  <div class="overlay confirm-overlay" id="shareOverlay">
+    <div class="modal share-modal">
+      <h2>Share your shelf</h2>
+      <label class="share-row">
+        <input type="checkbox" id="sharePublic" />
+        <span><strong>Make my shelf public</strong><br><span class="hint" style="margin:0;">Anyone with the link can view your books.</span></span>
+      </label>
+      <label class="share-row">
+        <input type="checkbox" id="shareNotes" />
+        <span><strong>Also show my notes</strong><br><span class="hint" style="margin:0;">Let visitors read your reflections too. Off = books only.</span></span>
+      </label>
+      <div id="shareLinkBox" style="display:none; margin-top:14px;">
+        <div class="hint" style="margin:0 0 5px;">Your public link:</div>
+        <div class="share-link-row">
+          <input type="text" id="shareLink" readonly />
+          <button type="button" class="btn-ghost" id="shareCopy">Copy</button>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="shareClose">Close</button>
+        <button type="button" class="btn-primary" id="shareSave">Save</button>
       </div>
     </div>
   </div>
@@ -861,9 +916,14 @@
 
     function renderBookBody(e) {
       const notes = e.notes || [];
-      const notesList = notes.length
-        ? `<ul class="note-list">${notes.map(threadHtml).join('')}</ul>`
-        : `<p class="note-empty">No thoughts yet — jot your first one below.</p>`;
+      let notesList;
+      if (publicMode && !publicNotesVisible) {
+        notesList = `<p class="note-empty">This reader keeps their notes private.</p>`;
+      } else if (notes.length) {
+        notesList = `<ul class="note-list">${notes.map(threadHtml).join('')}</ul>`;
+      } else {
+        notesList = `<p class="note-empty">${publicMode ? 'No notes on this one.' : 'No thoughts yet — jot your first one below.'}</p>`;
+      }
       const cover = e.cover_url
         ? `<img class="book-cover-lg" src="${esc(e.cover_url)}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'book-cover-lg placeholder',textContent:'No cover'}))" />`
         : `<div class="book-cover-lg placeholder">No cover</div>`;
@@ -1121,6 +1181,7 @@
     // ===== Drag to rearrange the shelf =====
     let dragEl = null;
     list.addEventListener('dragstart', (e) => {
+      if (publicMode) { e.preventDefault(); return; }   // read-only shelf: no rearranging
       const sp = e.target.closest('.spine');
       if (!sp) return;
       dragEl = sp;
@@ -1428,11 +1489,19 @@
       if (key) { reflect.activeBucket = reflect.activeBucket === key ? null : key; drawReflections(); }
     });
 
-    // ============ Authentication ============
+    // ============ Authentication & sharing ============
     let authMode = 'login';   // 'login' | 'register'
+    let currentUserData = null;
 
-    function showApp(username) {
-      $('whoami').textContent = `Signed in as ${username}`;
+    // Public, read-only mode when the URL is /u/<username>
+    const publicMatch = location.pathname.match(/^\/u\/([^/]+)\/?$/);
+    const PUBLIC_USER = publicMatch ? decodeURIComponent(publicMatch[1]) : null;
+    const publicMode = !!PUBLIC_USER;
+    let publicNotesVisible = false;
+
+    function showApp(user) {
+      currentUserData = user;
+      $('whoami').textContent = `Signed in as ${user.username}`;
       $('authScreen').style.display = 'none';
       $('appRoot').hidden = false;
       try { const s = localStorage.getItem('ptSort'); if (s) $('sortBy').value = s; } catch {}
@@ -1445,8 +1514,8 @@
       $('authPass').value = '';
       $('authUser').focus();
     }
-    // Any protected call can hit this if the session has expired.
-    function onUnauthorized() { showAuth(); }
+    // A protected call can hit this if the session expired (ignored in public mode).
+    function onUnauthorized() { if (!publicMode) showAuth(); }
 
     function setAuthMode(mode) {
       authMode = mode;
@@ -1480,7 +1549,7 @@
       }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { $('authError').textContent = data.error || 'Something went wrong.'; return; }
-      showApp(data.user.username);
+      showApp(data.user);
     };
 
     $('logoutBtn').onclick = async () => {
@@ -1488,14 +1557,79 @@
       showAuth();
     };
 
-    // On load, ask the server who (if anyone) is logged in.
-    (async () => {
+    // ---- Share shelf ----
+    const shareLinkFor = (u) => `${location.origin}/u/${encodeURIComponent(u)}`;
+    function openShare() {
+      const u = currentUserData || {};
+      $('sharePublic').checked = !!u.is_public;
+      $('shareNotes').checked = !!u.notes_public;
+      $('shareNotes').disabled = !u.is_public;
+      $('shareLink').value = shareLinkFor(u.username || '');
+      $('shareLinkBox').style.display = u.is_public ? '' : 'none';
+      $('shareOverlay').classList.add('open');
+    }
+    $('shareBtn').onclick = openShare;
+    $('shareClose').onclick = () => $('shareOverlay').classList.remove('open');
+    $('shareOverlay').addEventListener('click', (e) => { if (e.target === $('shareOverlay')) $('shareOverlay').classList.remove('open'); });
+    $('sharePublic').addEventListener('change', () => {
+      const on = $('sharePublic').checked;
+      $('shareNotes').disabled = !on;
+      if (!on) $('shareNotes').checked = false;
+      $('shareLinkBox').style.display = on ? '' : 'none';
+    });
+    $('shareCopy').onclick = async () => {
+      try { await navigator.clipboard.writeText($('shareLink').value); toast('Link copied'); }
+      catch { $('shareLink').select(); toast('Press Cmd+C to copy'); }
+    };
+    $('shareSave').onclick = async () => {
+      const body = { is_public: $('sharePublic').checked, notes_public: $('shareNotes').checked };
       try {
-        const res = await fetch('/api/me');
-        if (res.ok) { const { user } = await res.json(); showApp(user.username); }
-        else showAuth();
-      } catch { showAuth(); }
-    })();
+        const res = await fetch('/api/me/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!res.ok) { toast('Could not save.'); return; }
+        const d = await res.json();
+        if (currentUserData) { currentUserData.is_public = d.is_public; currentUserData.notes_public = d.notes_public; }
+        toast(d.is_public ? 'Your shelf is now public 🌍' : 'Your shelf is private again');
+        $('shareOverlay').classList.remove('open');
+      } catch { toast('Could not save.'); }
+    };
+
+    // ---- Public read-only shelf ----
+    async function loadPublicShelf() {
+      document.body.classList.add('public-mode');
+      $('authScreen').style.display = 'none';
+      $('appRoot').hidden = false;
+      try {
+        const res = await fetch(`/api/public/${encodeURIComponent(PUBLIC_USER)}`);
+        if (!res.ok) {
+          $('appTitle').textContent = '📚 Shelf not found';
+          $('appTagline').textContent = 'This shelf is private, or doesn’t exist.';
+          $('list').innerHTML = '';
+          return;
+        }
+        const data = await res.json();
+        publicNotesVisible = !!data.notes_public;
+        entries = data.books || [];
+        $('appTitle').textContent = `📚 ${data.username}’s shelf`;
+        $('appTagline').textContent = 'A Papertrail reading shelf.';
+        render();
+      } catch {
+        $('appTitle').textContent = '📚 Papertrail';
+        $('appTagline').textContent = 'Could not load this shelf.';
+      }
+    }
+
+    // ---- Boot ----
+    if (publicMode) {
+      loadPublicShelf();
+    } else {
+      (async () => {
+        try {
+          const res = await fetch('/api/me');
+          if (res.ok) { const { user } = await res.json(); showApp(user); }
+          else showAuth();
+        } catch { showAuth(); }
+      })();
+    }
   </script>
 </body>
 </html>
