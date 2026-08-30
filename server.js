@@ -19,7 +19,7 @@ const DB_PATH = process.env.DB_PATH || join(__dirname, 'reading.db');
 // GEMINI_API_KEY powers the AI book recommender. If unset, /api/recommendations
 // returns a friendly "not configured" message instead of erroring.
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 
 // --- Database (libSQL / Turso) --------------------------------------------
 // Uses a hosted Turso database in production (TURSO_DATABASE_URL + auth token),
@@ -656,7 +656,13 @@ async function callGemini(prompt) {
         headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json', temperature: 0.9 },
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.9,
+            // Gemini 3.x flash models "think" by default, which can take 45s+.
+            // "low" keeps recommendations fast (~1s) — plenty for this task.
+            thinkingConfig: { thinkingLevel: 'low' },
+          },
         }),
         signal: ctrl.signal,
       }
@@ -679,6 +685,66 @@ async function callGemini(prompt) {
   }
   const parts = data?.candidates?.[0]?.content?.parts || [];
   return parts.map((p) => p.text || '').join('').trim();
+}
+
+// True when two author strings share a significant name token (e.g. a surname),
+// so "Haruki Murakami" matches "Murakami, Haruki" but not "Greg Pierce".
+function authorMatches(a, b) {
+  const toks = (s) =>
+    String(s || '').toLowerCase().replace(/[^a-z\s,]/g, ' ').split(/[\s,]+/).filter((w) => w.length >= 3);
+  const A = new Set(toks(a));
+  return toks(b).some((w) => A.has(w));
+}
+
+// Finds a real cover/pages/year for a KNOWN title+author (from the AI). Unlike
+// lookupBook's generic search, this scopes the query by author, so it surfaces
+// the canonical edition instead of same-titled plays, study guides, or tie-ins.
+async function coverFor(title, author) {
+  const nt = String(title || '').trim();
+  if (!nt) return null;
+
+  // 1) Google Books, scoped by author — the most reliable covers and author
+  // metadata for popular titles (OL often indexes the translator or the author
+  // in a non-Latin script, so author-scoping misses the real edition there).
+  const gq = `intitle:${nt}` + (author ? ` inauthor:${author}` : '');
+  const gb = await fetchJSON(
+    `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(gq)}&maxResults=6`
+  );
+  for (const it of ((gb && gb.items) || [])) {
+    const v = it.volumeInfo || {};
+    if (!titleMatches(nt, v.title || '')) continue;
+    if (author && !(v.authors || []).some((n) => authorMatches(author, n))) continue;
+    const img = v.imageLinks && (v.imageLinks.thumbnail || v.imageLinks.smallThumbnail);
+    if (img) {
+      return {
+        cover_url: img.replace(/^http:/, 'https:'),
+        pages: v.pageCount || null,
+        year: v.publishedDate ? parseInt(v.publishedDate, 10) || null : null,
+      };
+    }
+  }
+
+  // 2) Open Library, scoped by author — fallback when Google Books is rate-
+  // limited or has no cover.
+  const params = new URLSearchParams({
+    title: nt, limit: '6',
+    fields: 'title,author_name,cover_i,first_publish_year,number_of_pages_median',
+  });
+  if (author) params.set('author', author);
+  const ol = await fetchJSON(`https://openlibrary.org/search.json?${params.toString()}`);
+  const docs = ((ol && ol.docs) || []).filter(
+    (d) => titleMatches(nt, d.title || '')
+      && (!author || (d.author_name || []).some((n) => authorMatches(author, n)))
+  );
+  const olHit = docs.find((d) => d.cover_i) || docs[0];
+  if (olHit) {
+    return {
+      cover_url: olHit.cover_i ? `https://covers.openlibrary.org/b/id/${olHit.cover_i}-M.jpg` : '',
+      pages: olHit.number_of_pages_median || null,
+      year: olHit.first_publish_year || null,
+    };
+  }
+  return null;
 }
 
 // Builds a compact profile from the user's library, asks Gemini for books they
@@ -728,10 +794,14 @@ async function recommendBooks(userId, useNotes = false) {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    const m = raw.match(/\{[\s\S]*\}/);
-    parsed = m ? JSON.parse(m[0]) : { recommendations: [] };
+    // Model occasionally wraps the JSON in prose — grab the array or object.
+    const m = raw.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
+    parsed = m ? JSON.parse(m[0]) : [];
   }
-  const suggestions = Array.isArray(parsed?.recommendations) ? parsed.recommendations : [];
+  // Accept either {"recommendations":[...]} or a bare [...] array.
+  const suggestions = Array.isArray(parsed)
+    ? parsed
+    : (Array.isArray(parsed?.recommendations) ? parsed.recommendations : []);
 
   // Ground each suggestion against the real book databases (for covers/pages)
   // and drop anything the reader already owns.
@@ -744,16 +814,13 @@ async function recommendBooks(userId, useNotes = false) {
     if (owned.has(key) || seen.has(key)) continue;
     seen.add(key);
 
-    let cover_url = '', pages = null, author = String(s?.author || '').trim(), year = null;
+    // Trust the AI's title+author (it's reliably correct for real books) and
+    // fetch a real cover/pages scoped to that author.
+    const author = String(s?.author || '').trim();
+    let cover_url = '', pages = null, year = null;
     try {
-      const look = await lookupBook(title, 1);
-      const c = look.found && look.candidates[0];
-      if (c && titleMatches(title, c.title)) {
-        cover_url = c.cover_url || '';
-        pages = c.pages || null;
-        year = c.year || null;
-        if (c.author) author = c.author;
-      }
+      const g = await coverFor(title, author);
+      if (g) { cover_url = g.cover_url || ''; pages = g.pages || null; year = g.year || null; }
     } catch { /* enrichment is best-effort */ }
 
     out.push({ title, author, reason: String(s?.reason || '').trim(), cover_url, pages, year });
