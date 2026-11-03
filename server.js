@@ -278,7 +278,21 @@ async function publicShelf(username) {
   );
   if (!u || !u.is_public) throw { code: 404, message: 'This shelf is private or does not exist' };
   const rows = await dbAll('SELECT * FROM entries WHERE user_id = ? ORDER BY position ASC, id DESC', [u.id]);
-  const books = u.notes_public ? await attachNotes(rows) : rows.map((r) => ({ ...r, notes: [] }));
+  let books;
+  if (u.notes_public) {
+    books = await attachNotes(rows);
+    // Don't expose note timestamps on a public shelf — strip created_at/updated_at
+    // from every note and its follow-ups so they're not even in the payload.
+    const strip = (n) => { const { created_at, updated_at, ...rest } = n; return rest; };
+    for (const b of books) {
+      b.notes = (b.notes || []).map((root) => ({
+        ...strip(root),
+        followups: (root.followups || []).map(strip),
+      }));
+    }
+  } else {
+    books = rows.map((r) => ({ ...r, notes: [] }));
+  }
   return { username: u.username, notes_public: !!u.notes_public, books };
 }
 
